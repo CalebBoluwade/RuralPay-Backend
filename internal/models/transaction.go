@@ -4,6 +4,52 @@ import (
 	"time"
 )
 
+type PaymentMode string
+type PaymentType string
+
+const (
+	PaymentModeCard         PaymentMode = "CARD"
+	PaymentModeQR           PaymentMode = "QR"
+	PaymentModeBankTransfer PaymentMode = "BANK_TRANSFER"
+	PaymentModeUSSD         PaymentMode = "USSD"
+	PaymentModeVoice        PaymentMode = "VOICE"
+)
+
+const (
+	DebitPayment      PaymentType = "DEBIT"
+	CreditPayment     PaymentType = "CREDIT"
+	WithdrawalPayment PaymentType = "WITHDRAWAL"
+)
+
+// Metadata type for JSONB fields
+type Metadata map[string]any
+
+type PaymentRequest struct {
+	TransactionID string      `json:"transactionId"`
+	Reference     string      `json:"reference,omitempty"`
+	UserID        string      `json:"userId"`
+	FromAccount   string      `json:"fromAccount"`
+	ToAccount     string      `json:"toAccount"`
+	ToBankCode    string      `json:"toBankCode,omitempty"`
+	Amount        int64       `json:"amount"`
+	Currency      string      `json:"currency"`
+	Metadata      Metadata    `json:"metadata"`
+	Narration     string      `json:"narration"`
+	TxType        PaymentType `json:"txType"`
+	PaymentMode   PaymentMode `json:"paymentMode"`
+	Location      *Location   `json:"location,omitempty"`
+}
+
+type PaymentResponse struct {
+	Success       bool        `json:"success"`
+	TransactionID string      `json:"transactionId"`
+	Status        string      `json:"status"`
+	Message       string      `json:"message"`
+	Metadata      Metadata    `json:"metadata"`
+	PaymentMode   PaymentMode `json:"paymentMode"`
+	Timestamp     time.Time   `json:"timestamp"`
+}
+
 // Location represents geographical location data
 type Location struct {
 	Latitude  float64 `json:"latitude" db:"latitude"`
@@ -28,8 +74,8 @@ type Transaction struct {
 	ID            int        `json:"id" db:"id"`
 	TransactionID string     `json:"transaction_id" db:"transaction_id"`
 	ReferenceID   string     `json:"reference_id" db:"reference_id"`
-	FromCardID    string     `json:"from_card_id" db:"from_card_id"`
-	ToCardID      string     `json:"to_card_id" db:"to_card_id"`
+	FromAccountID string     `json:"from_account_id" db:"from_account_id"`
+	ToAccountID   string     `json:"to_account_id" db:"to_account_id"`
 	Amount        float64    `json:"amount" db:"amount"`
 	Fee           float64    `json:"fee" db:"fee"`
 	TotalAmount   float64    `json:"total_amount" db:"total_amount"`

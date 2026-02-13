@@ -57,7 +57,7 @@ tx := &models.Transaction{
     FromCardID:    "CARD001",       // NFC card that's sending money
     ToCardID:      "CARD002",       // NFC card that's receiving money
     Amount:        250.75,          // Amount in dollars (or your currency)
-    Currency:      "USD",           // Currency code (USD, EUR, GBP, etc.)
+    Currency:      "NGN",           // Currency code (NGN, EUR, GBP, etc.)
 }
 
 // Step 3: Convert your transaction to bank-standard format
@@ -148,7 +148,7 @@ The service provides HTTP endpoints for testing:
     <MsgId>unique-message-id</MsgId>           <!-- Unique ID for this message -->
     <CreDtTm>2026-01-03T19:29:43.943477</CreDtTm> <!-- When this message was created -->
     <NbOfTxs>1</NbOfTxs>                        <!-- Number of transactions in this message -->
-    <TtlIntrBkSttlmAmt Ccy="USD">250.75</TtlIntrBkSttlmAmt> <!-- Total amount to settle -->
+    <TtlIntrBkSttlmAmt Ccy="NGN">250.75</TtlIntrBkSttlmAmt> <!-- Total amount to settle -->
     <IntrBkSttlmDt>2026-01-03</IntrBkSttlmDt>   <!-- When banks should settle -->
     <SttlmInf>
       <SttlmMtd>CLRG</SttlmMtd>                 <!-- Settlement method: Clearing -->
@@ -161,7 +161,7 @@ The service provides HTTP endpoints for testing:
       <EndToEndId>REF987654321</EndToEndId>     <!-- End-to-end reference (tracks from start to finish) -->
       <TxId>TXN123456789</TxId>                 <!-- Transaction ID -->
     </PmtId>
-    <IntrBkSttlmAmt Ccy="USD">250.75</IntrBkSttlmAmt> <!-- Amount for this specific transaction -->
+    <IntrBkSttlmAmt Ccy="NGN">250.75</IntrBkSttlmAmt> <!-- Amount for this specific transaction -->
     <IntrBkSttlmDt>2026-01-03</IntrBkSttlmDt>   <!-- Settlement date for this transaction -->
     <ChrgBr>SLEV</ChrgBr>                       <!-- Charge Bearer: Service Level (who pays fees) -->
     <Dbtr>                                      <!-- Debtor: Who is sending the money -->

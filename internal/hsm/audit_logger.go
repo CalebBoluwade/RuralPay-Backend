@@ -10,7 +10,8 @@ type AuditEvent struct {
 	Timestamp     time.Time `json:"timestamp"`
 	EventType     string    `json:"event_type"`
 	TransactionID string    `json:"transaction_id"`
-	AccountID     string    `json:"account_id"`
+	FromAccountID string    `json:"from_account_id"`
+	ToAccountID   string    `json:"to_account_id"`
 	Amount        int64     `json:"amount"`
 	Status        string    `json:"status"`
 	Details       any       `json:"details"`
@@ -42,7 +43,7 @@ func (a *AuditLogger) LogError(transactionID, accountID string, err error) {
 		Timestamp:     time.Now(),
 		EventType:     "ERROR",
 		TransactionID: transactionID,
-		AccountID:     accountID,
+		FromAccountID: accountID,
 		Status:        "FAILED",
 		Details:       map[string]string{"error": err.Error()},
 	}
@@ -54,7 +55,7 @@ func (a *AuditLogger) LogOperation(transactionID, accountID, operation, details 
 		Timestamp:     time.Now(),
 		EventType:     operation,
 		TransactionID: transactionID,
-		AccountID:     accountID,
+		FromAccountID: accountID,
 		Status:        "SUCCESS",
 		Details:       map[string]string{"details": details},
 	}

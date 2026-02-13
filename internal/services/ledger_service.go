@@ -106,7 +106,7 @@ func (s *DoubleLedgerService) lockAccount(tx *sql.Tx, accountID string) (*models
 	err := tx.QueryRow(`
 		SELECT id, balance, version, updated_at 
 		FROM accounts 
-		WHERE card_id = $1 OR account_id = $1 OR id = $1
+		WHERE account_id = $1 OR card_id = $1
 		LIMIT 1
 		FOR UPDATE`, accountID).Scan(&account.ID, &account.Balance, &account.Version, &account.UpdatedAt)
 	

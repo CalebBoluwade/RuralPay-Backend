@@ -17,6 +17,11 @@ const docTemplate = `{
     "paths": {
         "/accounts/balance-enquiry": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Retrieve all accounts and cards with balances for the authenticated user",
                 "produces": [
                     "application/json"
@@ -24,7 +29,7 @@ const docTemplate = `{
                 "tags": [
                     "accounts"
                 ],
-                "summary": "Get user accounts and cards",
+                "summary": "Get user accounts and balances",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -46,19 +51,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -66,7 +65,12 @@ const docTemplate = `{
         },
         "/accounts/name-enquiry": {
             "get": {
-                "description": "Retrieve account name for a given account ID and bank code",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve account name for a given account ID",
                 "produces": [
                     "application/json"
                 ],
@@ -113,31 +117,22 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -269,6 +264,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/auth/forgot-password": {
+            "post": {
+                "description": "Send password reset token to user's email",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Request password reset",
+                "parameters": [
+                    {
+                        "description": "Email address",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Reset token sent",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "User not found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "description": "Authenticate user with email and password",
@@ -389,6 +436,58 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/auth/reset-password": {
+            "post": {
+                "description": "Reset user password using reset token",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "auth"
+                ],
+                "summary": "Reset password",
+                "parameters": [
+                    {
+                        "description": "Reset token and new password",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Password reset successful",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid or expired token",
                         "schema": {
                             "type": "string"
                         }
@@ -765,6 +864,397 @@ const docTemplate = `{
                 }
             }
         },
+        "/merchants": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve a list of all merchants, optionally filtered by status",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchants"
+                ],
+                "summary": "List all merchants",
+                "parameters": [
+                    {
+                        "enum": [
+                            "pending",
+                            "active",
+                            "suspended",
+                            "rejected"
+                        ],
+                        "type": "string",
+                        "description": "Filter by status",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Merchant"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/merchants/me": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve merchant information for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchants"
+                ],
+                "summary": "Get merchant details",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Merchant"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update merchant information for the authenticated user",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchants"
+                ],
+                "summary": "Update merchant details",
+                "parameters": [
+                    {
+                        "description": "Merchant update details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/services.UpdateMerchantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Merchant"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/merchants/onboard": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Create a new merchant account for the authenticated user",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchants"
+                ],
+                "summary": "Onboard a new merchant",
+                "parameters": [
+                    {
+                        "description": "Merchant onboarding details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/services.OnboardMerchantRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.Merchant"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/merchants/status": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update the status of a merchant (admin only)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "merchants"
+                ],
+                "summary": "Update merchant status",
+                "parameters": [
+                    {
+                        "description": "Status update details",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "merchantId": {
+                                    "type": "integer"
+                                },
+                                "status": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/payments": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Process a payment using the specified payment mode (CARD, QR, BANK_TRANSFER, USSD, VOICE)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "payments"
+                ],
+                "summary": "Process payment",
+                "parameters": [
+                    {
+                        "description": "Payment request",
+                        "name": "payment",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/providers.PaymentRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.PaymentResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/qr/generate": {
             "post": {
                 "security": [
@@ -888,6 +1378,11 @@ const docTemplate = `{
         },
         "/transactions": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Get a list of transactions with optional filtering",
                 "produces": [
                     "application/json"
@@ -928,7 +1423,7 @@ const docTemplate = `{
                                 "transactions": {
                                     "type": "array",
                                     "items": {
-                                        "$ref": "#/definitions/services.Transaction"
+                                        "$ref": "#/definitions/services.TransactionDTO"
                                     }
                                 }
                             }
@@ -937,212 +1432,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Process a single NFC payment transaction",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "transactions"
-                ],
-                "summary": "Create a new transaction",
-                "parameters": [
-                    {
-                        "description": "Transaction data",
-                        "name": "transaction",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/services.Transaction"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/services.Transaction"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/transactions/batch": {
-            "post": {
-                "description": "Process a batch of NFC payment transactions",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "transactions"
-                ],
-                "summary": "Process multiple transactions",
-                "parameters": [
-                    {
-                        "description": "Batch transaction data",
-                        "name": "transactions",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "transactions": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/services.Transaction"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "failed": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object"
-                                    }
-                                },
-                                "processed": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/services.Transaction"
-                                    }
-                                },
-                                "summary": {
-                                    "type": "object"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/transactions/external": {
-            "post": {
-                "description": "Process bank-to-bank transfer using ISO 20022 messaging",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "transactions"
-                ],
-                "summary": "Send external bank transfer",
-                "parameters": [
-                    {
-                        "description": "Transfer details",
-                        "name": "transfer",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "amount": {
-                                    "type": "number",
-                                    "format": "float64"
-                                },
-                                "currency": {
-                                    "type": "string"
-                                },
-                                "fromAccount": {
-                                    "type": "string"
-                                },
-                                "reference": {
-                                    "type": "string"
-                                },
-                                "toAccount": {
-                                    "type": "string"
-                                },
-                                "toBankCode": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "status": {
-                                    "type": "string"
-                                },
-                                "success": {
-                                    "type": "boolean"
-                                },
-                                "transactionId": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -1150,7 +1440,12 @@ const docTemplate = `{
         },
         "/transactions/recent": {
             "get": {
-                "description": "Get a list of recent transactions with configurable limit",
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get a list of recent transactions for the authenticated user",
                 "produces": [
                     "application/json"
                 ],
@@ -1172,17 +1467,26 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/services.Transaction"
+                                "$ref": "#/definitions/services.TransactionDTO"
                             }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -1190,6 +1494,11 @@ const docTemplate = `{
         },
         "/transactions/{txId}": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Retrieve a transaction by its ID",
                 "produces": [
                     "application/json"
@@ -1211,25 +1520,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/services.Transaction"
+                            "$ref": "#/definitions/services.TransactionDTO"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -1416,6 +1719,44 @@ const docTemplate = `{
                 }
             }
         },
+        "models.Merchant": {
+            "type": "object",
+            "properties": {
+                "accountId": {
+                    "type": "string"
+                },
+                "businessName": {
+                    "type": "string"
+                },
+                "businessType": {
+                    "type": "string"
+                },
+                "commissionRate": {
+                    "type": "number"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "settlementCycle": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "taxId": {
+                    "type": "string"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "userId": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.Metadata": {
             "type": "object",
             "additionalProperties": {}
@@ -1491,6 +1832,82 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.PaymentMode": {
+            "type": "string",
+            "enum": [
+                "CARD",
+                "QR",
+                "BANK_TRANSFER",
+                "USSD",
+                "VOICE"
+            ],
+            "x-enum-varnames": [
+                "PaymentModeCard",
+                "PaymentModeQR",
+                "PaymentModeBankTransfer",
+                "PaymentModeUSSD",
+                "PaymentModeVoice"
+            ]
+        },
+        "providers.PaymentRequest": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "integer"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "fromAccount": {
+                    "type": "string"
+                },
+                "location": {
+                    "$ref": "#/definitions/models.Location"
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": {}
+                },
+                "narration": {
+                    "type": "string"
+                },
+                "paymentMode": {
+                    "$ref": "#/definitions/providers.PaymentMode"
+                },
+                "toAccount": {
+                    "type": "string"
+                },
+                "transactionId": {
+                    "type": "string"
+                },
+                "userId": {
+                    "type": "string"
+                }
+            }
+        },
+        "providers.PaymentResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string"
+                },
+                "paymentMode": {
+                    "$ref": "#/definitions/providers.PaymentMode"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "transactionId": {
+                    "type": "string"
+                }
+            }
+        },
         "services.AuthResponse": {
             "description": "Authentication response structure",
             "type": "object",
@@ -1547,6 +1964,40 @@ const docTemplate = `{
                 }
             }
         },
+        "services.OnboardMerchantRequest": {
+            "type": "object",
+            "required": [
+                "businessName",
+                "businessType",
+                "settlementCycle",
+                "taxId"
+            ],
+            "properties": {
+                "businessName": {
+                    "type": "string",
+                    "minLength": 2
+                },
+                "businessType": {
+                    "type": "string"
+                },
+                "commissionRate": {
+                    "type": "number",
+                    "maximum": 100,
+                    "minimum": 0
+                },
+                "settlementCycle": {
+                    "type": "string",
+                    "enum": [
+                        "daily",
+                        "weekly",
+                        "monthly"
+                    ]
+                },
+                "taxId": {
+                    "type": "string"
+                }
+            }
+        },
         "services.RegisterRequest": {
             "description": "Registration request structure",
             "type": "object",
@@ -1594,28 +2045,14 @@ const docTemplate = `{
                 }
             }
         },
-        "services.Transaction": {
+        "services.TransactionDTO": {
             "type": "object",
-            "required": [
-                "amount",
-                "cardId",
-                "counter",
-                "currency",
-                "merchantId",
-                "signature",
-                "timestamp",
-                "txId",
-                "txType"
-            ],
             "properties": {
                 "amount": {
                     "type": "integer"
                 },
                 "cardId": {
                     "type": "string"
-                },
-                "counter": {
-                    "type": "integer"
                 },
                 "createdAt": {
                     "type": "string"
@@ -1626,30 +2063,14 @@ const docTemplate = `{
                 "merchantId": {
                     "type": "string"
                 },
-                "narration": {
-                    "type": "string"
-                },
-                "signature": {
-                    "type": "string"
-                },
                 "status": {
                     "type": "string"
-                },
-                "timestamp": {
-                    "type": "integer"
                 },
                 "txId": {
                     "type": "string"
                 },
                 "txType": {
-                    "type": "string",
-                    "enum": [
-                        "DEBIT",
-                        "CREDIT"
-                    ]
-                },
-                "version": {
-                    "type": "integer"
+                    "type": "string"
                 }
             }
         },
@@ -1699,6 +2120,30 @@ const docTemplate = `{
                 "PullPayment"
             ]
         },
+        "services.UpdateMerchantRequest": {
+            "type": "object",
+            "properties": {
+                "businessName": {
+                    "type": "string"
+                },
+                "businessType": {
+                    "type": "string"
+                },
+                "commissionRate": {
+                    "type": "number",
+                    "maximum": 100,
+                    "minimum": 0
+                },
+                "settlementCycle": {
+                    "type": "string",
+                    "enum": [
+                        "daily",
+                        "weekly",
+                        "monthly"
+                    ]
+                }
+            }
+        },
         "services.User": {
             "description": "User structure",
             "type": "object",
@@ -1727,6 +2172,9 @@ const docTemplate = `{
                     "description": "User phone number",
                     "type": "string",
                     "example": "+2348012345678"
+                },
+                "device_id": {
+                    "type": "string"
                 },
                 "email": {
                     "description": "User email",

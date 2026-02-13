@@ -30,14 +30,15 @@ type AuthService struct {
 // LoginRequest represents the login request payload
 // @Description Login request structure
 type LoginRequest struct {
-	PhoneNumber string `json:"phoneNumber" validate:"required" example:"+2348012345678"` // User phone number
-	Password    string `json:"password" validate:"required,min=6" example:"password123"` // User password
+	Identifier string `json:"identifier" validate:"required" example:"+2348012345678"` // User phone number, email, or username
+	Password   string `json:"password" validate:"required,min=6" example:"password123"`  // User password
 }
 
 // RegisterRequest represents the registration request payload
 // @Description Registration request structure
 type RegisterRequest struct {
 	Email       string `json:"Email" validate:"required,email" example:"user@example.com"` // User email address
+	Username    string `json:"Username" validate:"required,min=3" example:"johndoe"`       // Username
 	Password    string `json:"Password" validate:"required,min=6" example:"password123"`   // User password
 	FirstName   string `json:"FirstName" validate:"required,min=2" example:"John"`         // User first name
 	LastName    string `json:"LastName" validate:"required,min=2" example:"Doe"`           // User last name
@@ -128,6 +129,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	// Generate 10-digit account ID
 	accountID := generateAccountID()
+	accountName := fmt.Sprintf("%s %s", req.FirstName, req.LastName)
 
 	// Start transaction
 	tx, err := s.db.Begin()
@@ -138,23 +140,29 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Insert user with account_id
+	// Insert user, account, and limits in a single CTE query
 	var userID int
-	err = tx.QueryRow("INSERT INTO users (email, password, first_name, last_name, account_id, bvn, phone_number) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-		strings.ToLower(req.Email), hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber).Scan(&userID)
+	err = tx.QueryRow(`
+		WITH new_user AS (
+			INSERT INTO users (email, username, password, first_name, last_name, account_id, bvn, phone_number)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING id
+		),
+		new_account AS (
+			INSERT INTO accounts (account_name, account_id, balance, version, user_id, updated_at)
+			SELECT $9, $6, 0, 1, id, NOW() FROM new_user
+			RETURNING user_id
+		),
+		new_limits AS (
+			INSERT INTO user_limits (user_id, daily_limit, single_transaction_limit, updated_at)
+			SELECT id, $10, $11, NOW() FROM new_user
+			RETURNING user_id
+		)
+		SELECT id FROM new_user
+	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, accountName, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
 	if err != nil {
 		log.Printf("[AUTH] User creation failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "Email Already Exists", http.StatusConflict, nil)
-		return
-	}
-
-	// Create account record
-	accountName := fmt.Sprintf("%s %s", req.FirstName, req.LastName)
-	_, err = tx.Exec("INSERT INTO accounts (account_name, account_id, balance, version, updated_at) VALUES ($1, $2, $3, $4, NOW())",
-		accountName, accountID, 0, 1)
-	if err != nil {
-		log.Printf("[AUTH] Account creation failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "Failed to create account", http.StatusInternalServerError, nil)
+		s.sendErrorResponse(w, "Email or Username Already Exists", http.StatusConflict, nil)
 		return
 	}
 
@@ -167,7 +175,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[AUTH] User created successfully - ID: %d, Email: %s", userID, req.Email)
 
-	token, err := generateJWT(userID)
+	token, err := generateJWT(userID, nil, nil)
 	if err != nil {
 		log.Printf("[AUTH] JWT generation failed for user %d: %v", userID, err)
 		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
@@ -224,27 +232,40 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[AUTH] Login request for phone number: %s", req.PhoneNumber)
+	log.Printf("[AUTH] Login request for identifier: %s", req.Identifier)
 
 	var user User
 	var hashedPassword string
-	err := s.db.QueryRow("SELECT id, email, first_name, last_name, password, account_id FROM users WHERE phone_number = $1",
-		req.PhoneNumber).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &hashedPassword, &user.AccountId)
+	err := s.db.QueryRow(`SELECT id, email, first_name, last_name, password, account_id 
+		FROM users 
+		WHERE phone_number = $1 OR LOWER(email) = LOWER($1) OR username = $1`,
+		req.Identifier).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &hashedPassword, &user.AccountId)
 	if err != nil {
-		log.Printf("[AUTH] User not found for phone number: %s", req.PhoneNumber)
+		log.Printf("[AUTH] User not found for identifier: %s", req.Identifier)
 		s.sendErrorResponse(w, "Invalid credentials", http.StatusUnauthorized, nil)
 		return
 	}
 
 	if !verifyPassword(req.Password, hashedPassword) {
-		log.Printf("[AUTH] Invalid password for user: %s", req.PhoneNumber)
+		log.Printf("[AUTH] Invalid password for identifier: %s", req.Identifier)
 		s.sendErrorResponse(w, "Invalid credentials", http.StatusUnauthorized, nil)
 		return
 	}
 
 	log.Printf("[AUTH] Password verified for user ID: %d", user.ID)
 
-	token, err := generateJWT(user.ID)
+	var merchantID *int
+	var merchantStatus *string
+	var mID int
+	var mStatus string
+	err = s.db.QueryRow("SELECT id, status FROM merchants WHERE user_id = $1", user.ID).Scan(&mID, &mStatus)
+	if err == nil {
+		merchantID = &mID
+		merchantStatus = &mStatus
+		log.Printf("[AUTH] Merchant found for user %d - Merchant ID: %d, Status: %s", user.ID, mID, mStatus)
+	}
+
+	token, err := generateJWT(user.ID, merchantID, merchantStatus)
 	if err != nil {
 		log.Printf("[AUTH] JWT generation failed for user %d: %v", user.ID, err)
 		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
@@ -286,54 +307,6 @@ func (s *AuthService) Logout(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Logout successful"})
-}
-
-// ValidateBVN validates a BVN number and sends OTP
-// @Summary Validate BVN
-// @Description Validate a Bank Verification Number and send OTP
-// @Tags accounts
-// @Accept json
-// @Produce json
-// @Param request body map[string]string true "BVN validation request"
-// @Success 200 {object} map[string]interface{} "OTP sent successfully"
-// @Failure 400 {string} string "Invalid request"
-// @Router /accounts/validate-bvn [post]
-func (s *AuthService) ValidateBVN(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		BVN         string `json:"bvn" validate:"required,len=11"`
-		PhoneNumber string `json:"phoneNumber" validate:"required"`
-		Email       string `json:"email" validate:"required,email"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
-		return
-	}
-
-	if err := s.validator.Struct(&req); err != nil {
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
-		return
-	}
-
-	otp := generateOTP()
-	key := fmt.Sprintf("bvn_otp:%s", req.BVN)
-
-	if s.redis != nil {
-		ctx := context.Background()
-		if err := s.redis.Set(ctx, key, otp, 10*time.Minute).Err(); err != nil {
-			log.Printf("[AUTH] Failed to store OTP in Redis: %v", err)
-			s.sendErrorResponse(w, "Failed to generate OTP", http.StatusInternalServerError, nil)
-			return
-		}
-	}
-
-	log.Printf("[AUTH] OTP generated for BVN %s: %s (Phone: %s, Email: %s)", req.BVN, otp, req.PhoneNumber, req.Email)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"message": "OTP Sent Successfully",
-		"valid":   true,
-	})
 }
 
 // VerifyOTP verifies the OTP for BVN validation
@@ -431,13 +404,19 @@ func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(user)
 }
 
-func generateJWT(userID int) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+func generateJWT(userID int, merchantID *int, merchantStatus *string) (string, error) {
+	claims := jwt.MapClaims{
 		"user_id": userID,
 		"nameid":  userID,
 		"exp":     time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_hours")) * time.Hour).Unix(),
-	})
-
+	}
+	if merchantID != nil {
+		claims["merchant_id"] = *merchantID
+	}
+	if merchantStatus != nil {
+		claims["merchant_status"] = *merchantStatus
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(viper.GetString("jwt.secret_key")))
 }
 
@@ -492,4 +471,156 @@ func generateOTP() string {
 	b := make([]byte, 4)
 	cryptorand.Read(b)
 	return fmt.Sprintf("%08d", (int(b[0])<<24|int(b[1])<<16|int(b[2])<<8|int(b[3]))%100000000)
+}
+
+func generateResetToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+// ForgotPassword handles password reset request
+// @Summary Request password reset
+// @Description Send password reset token to user's email
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body map[string]string true "Email address"
+// @Success 200 {object} map[string]string "Reset token sent"
+// @Failure 400 {string} string "Invalid request"
+// @Failure 404 {string} string "User not found"
+// @Router /auth/forgot-password [post]
+func (s *AuthService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email string `json:"email" validate:"required,email"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		return
+	}
+
+	if err := s.validator.Struct(&req); err != nil {
+		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		return
+	}
+
+	var userID int
+	err := s.db.QueryRow("SELECT id FROM users WHERE email = $1", strings.ToLower(req.Email)).Scan(&userID)
+	if err != nil {
+		log.Printf("[AUTH] User not found for email: %s", req.Email)
+		s.sendErrorResponse(w, "User not found", http.StatusNotFound, nil)
+		return
+	}
+
+	token, err := generateResetToken()
+	if err != nil {
+		log.Printf("[AUTH] Failed to generate reset token: %v", err)
+		s.sendErrorResponse(w, "Failed to generate reset token", http.StatusInternalServerError, nil)
+		return
+	}
+
+	expiresAt := time.Now().Add(1 * time.Hour)
+	_, err = s.db.Exec("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+		userID, token, expiresAt)
+	if err != nil {
+		log.Printf("[AUTH] Failed to store reset token: %v", err)
+		s.sendErrorResponse(w, "Failed to process request", http.StatusInternalServerError, nil)
+		return
+	}
+
+	log.Printf("[AUTH] Password reset token generated for user %d: %s", userID, token)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Password reset token sent",
+		"token":   token,
+	})
+}
+
+// ResetPassword handles password reset with token
+// @Summary Reset password
+// @Description Reset user password using reset token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body map[string]string true "Reset token and new password"
+// @Success 200 {object} map[string]string "Password reset successful"
+// @Failure 400 {string} string "Invalid request"
+// @Failure 401 {string} string "Invalid or expired token"
+// @Router /auth/reset-password [post]
+func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token    string `json:"token" validate:"required"`
+		Password string `json:"password" validate:"required,min=6"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		return
+	}
+
+	if err := s.validator.Struct(&req); err != nil {
+		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		return
+	}
+
+	var userID int
+	var expiresAt time.Time
+	var used bool
+	err := s.db.QueryRow("SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token = $1",
+		req.Token).Scan(&userID, &expiresAt, &used)
+	if err != nil {
+		log.Printf("[AUTH] Invalid reset token: %s", req.Token)
+		s.sendErrorResponse(w, "Invalid or expired token", http.StatusUnauthorized, nil)
+		return
+	}
+
+	if used || time.Now().After(expiresAt) {
+		log.Printf("[AUTH] Reset token expired or already used: %s", req.Token)
+		s.sendErrorResponse(w, "Invalid or expired token", http.StatusUnauthorized, nil)
+		return
+	}
+
+	hashedPassword, err := hashPassword(req.Password)
+	if err != nil {
+		log.Printf("[AUTH] Password hashing failed: %v", err)
+		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		return
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		log.Printf("[AUTH] Transaction start failed: %v", err)
+		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		return
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE users SET password = $1 WHERE id = $2", hashedPassword, userID)
+	if err != nil {
+		log.Printf("[AUTH] Failed to update password: %v", err)
+		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		return
+	}
+
+	_, err = tx.Exec("UPDATE password_reset_tokens SET used = TRUE WHERE token = $1", req.Token)
+	if err != nil {
+		log.Printf("[AUTH] Failed to mark token as used: %v", err)
+		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		return
+	}
+
+	if err = tx.Commit(); err != nil {
+		log.Printf("[AUTH] Transaction commit failed: %v", err)
+		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		return
+	}
+
+	log.Printf("[AUTH] Password reset successful for user %d", userID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"message": "Password reset successful"})
 }

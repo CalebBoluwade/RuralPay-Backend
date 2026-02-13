@@ -65,12 +65,23 @@ func main() {
 	viper.BindEnv("argon2.key_length", "ARGON2_KEY_LENGTH")
 	viper.BindEnv("argon2.salt_length", "ARGON2_SALT_LENGTH")
 
+	viper.BindEnv("nibss.base_url", "NIBSS_BASE_URL")
+	viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
+
+	viper.BindEnv("PII_ENCRYPTION_KEY", "PII_ENCRYPTION_KEY")
+
+	viper.BindEnv("user.default_daily_limit", "USER_DEFAULT_DAILY_LIMIT")
+	viper.BindEnv("user.default_single_tx_limit", "USER_DEFAULT_SINGLE_TX_LIMIT")
+
+	viper.SetDefault("user.default_daily_limit", 500000)
+	viper.SetDefault("user.default_single_tx_limit", 100000)
+
 	if err := viper.ReadInConfig(); err != nil {
 		log.Printf("Config file not found, using defaults: %v", err)
 	}
 
 	// Initialize Swagger docs
-	docs.SwaggerInfo.Title = "NFC Payments Backend API"
+	docs.SwaggerInfo.Title = "RuralPay Backend API"
 	docs.SwaggerInfo.Description = "API for NFC-based payment processing system"
 	docs.SwaggerInfo.Version = "1.0"
 	docs.SwaggerInfo.Host = "localhost:8080"
@@ -93,15 +104,15 @@ func main() {
 		Salt:            []byte(viper.GetString("hsm.salt")),
 	})
 	if err != nil {
-		log.Fatalf("Failed to initialize HSM: %v", err)
+		log.Fatalf("Failed to Initialize HSM: %v", err)
 	}
 
 	// Sync HSM keys to database
 	hsmKeyService := services.NewHSMKeyService(db, hsm)
 	if err := hsmKeyService.SyncKeysToDatabase(); err != nil {
-		log.Printf("Warning: Failed to sync HSM keys to database: %v", err)
+		log.Printf("Warning: Failed to Sync HSM Keys to Database: %v", err)
 	} else {
-		log.Println("HSM keys synced to database successfully")
+		log.Println("HSM Keys Synced to Database Successfully")
 	}
 	defer func() {
 		if logger, ok := hsmInstance.(interface{ Close() error }); ok {
@@ -111,17 +122,19 @@ func main() {
 		}
 	}()
 
-	transactionService := services.NewTransactionService(db, redisClient, hsm)
-	provisioningService := services.NewCardProvisioningService(db, hsm)
-	iso20022Service := services.NewISO20022Service()
+	// Initialize services
 	authService := services.NewAuthService(db, redisClient)
-	ussdService := services.NewUSSDService(db, redisClient)
-	ussdHandler := handlers.NewUSSDHandler(ussdService)
-	qrService := services.NewQRService(db, redisClient)
-	qrHandler := handlers.NewQRHandler(qrService)
 	bankService := services.NewBankService()
-	voiceService := services.NewVoiceBankingService()
-	defer voiceService.Close()
+	accountService := services.NewAccountService(db, redisClient)
+	cardService := services.NewCardService(db, hsm)
+	iso20022Service := services.NewISO20022Service()
+	merchantService := services.NewMerchantService(db)
+	transactionQueryService := services.NewTransactionQueryService(db)
+	qrService := services.NewQRService(db, redisClient)
+
+	// Initialize unified payment handler
+	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm)
+	qrHandler := handlers.NewQRHandler(qrService)
 
 	// Initialize auth middleware with Redis
 	mW.InitAuthMiddleware(redisClient)
@@ -130,7 +143,7 @@ func main() {
 	r := chi.NewRouter()
 
 	// Middleware
-	r.Use(mW.SecurityHeaders)
+	// r.Use(mW.SecurityHeaders)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
@@ -171,8 +184,9 @@ func main() {
 		r.Post("/auth/register", authService.Register)
 		r.Post("/auth/login", authService.Login)
 		r.Post("/auth/logout", authService.Logout)
+		r.Post("/auth/forgot-password", authService.ForgotPassword)
+		r.Post("/auth/reset-password", authService.ResetPassword)
 		r.Get("/banks", bankService.GetAllBanks)
-		r.Post("/accounts/validate-bvn", authService.ValidateBVN)
 		r.Post("/accounts/verify-otp", authService.VerifyOTP)
 
 		// Protected endpoints (auth required)
@@ -181,41 +195,43 @@ func main() {
 
 			r.Get("/auth/account", authService.GetUserAccount)
 
-			r.Get("/transactions", transactionService.ListTransactions)
-			r.Get("/transactions/{txId}", transactionService.GetTransaction)
-			r.Post("/transactions", transactionService.CreateTransaction)
-			r.Post("/transactions/batch", transactionService.BatchTransactions)
-			r.Post("/transactions/external", transactionService.ExternalBankTransfer)
-			r.Get("/transactions/recent", transactionService.GetRecentTransactions)
+			// Unified payment endpoint
+			r.Post("/payments", paymentHandler.HandlePayment)
 
-			// User account endpoint
+			// Transaction query endpoints
+			r.Get("/transactions", transactionQueryService.ListTransactions)
+			r.Get("/transactions/{txId}", transactionQueryService.GetTransaction)
+			r.Get("/transactions/recent", transactionQueryService.GetRecentTransactions)
 
-			// Account enquiry endpoints (supports accountId query parameter)
-			r.Get("/accounts/name-enquiry", transactionService.AccountNameEnquiry)
-			r.Get("/accounts/balance-enquiry", transactionService.AccountBalanceEnquiry)
+			// Account endpoints
+			r.Post("/accounts/link", accountService.LinkAccount)
+			r.Get("/accounts/name-enquiry", accountService.AccountNameEnquiry)
+			r.Get("/accounts/balance-enquiry", accountService.AccountBalanceEnquiry)
+			r.Put("/accounts/limits", accountService.UpdateUserLimits)
+			r.Post("/accounts/validate-bvn", accountService.ValidateBVN)
 
 			// Card provisioning endpoints
-			r.Post("/cards/provision", provisioningService.ProvisionCard)
-			r.Post("/cards/activate", provisioningService.ActivateCard)
-			r.Get("/cards/{cardId}", provisioningService.GetCard)
-			r.Put("/cards/{cardId}/suspend", provisioningService.SuspendCard)
-			r.Put("/cards/{cardId}/reinstate", provisioningService.ReinstateCard)
+			r.Get("/cards/bins", cardService.QueryCardBin)
+			r.Post("/cards/provision", cardService.ProvisionCard)
+			r.Post("/cards/activate", cardService.ActivateCard)
+			r.Get("/cards/{cardId}", cardService.GetCard)
+			r.Put("/cards/{cardId}/suspend", cardService.SuspendCard)
 
 			// ISO 20022 endpoints
 			r.Post("/iso20022/convert", iso20022Service.ConvertToISO20022)
 			r.Post("/iso20022/settlement", iso20022Service.ProcessSettlement)
 
-			// USSD endpoints
-			r.Post("/ussd/generate", ussdHandler.GenerateCode)
-			r.Post("/ussd/validate", ussdHandler.ValidateCode)
-			r.Get("/ussd/codes", ussdHandler.GetUserCodes)
+			merchantRoute := "/merchants"
+
+			// Merchant endpoints
+			r.Post(merchantRoute, merchantService.OnboardMerchant)
+			r.Put(merchantRoute, merchantService.UpdateMerchant)
+			r.Get(merchantRoute, merchantService.GetMerchant)
+			r.Get("/merchants/list", merchantService.ListMerchants)
+			r.Put("/merchants/status", merchantService.UpdateMerchantStatus)
 
 			// QR endpoints
 			r.Post("/qr/generate", qrHandler.GenerateQR)
-			r.Post("/qr/process", qrHandler.ProcessQR)
-
-			// Voice banking endpoints
-			r.Post("/transactions/voice-transcribe", voiceService.TranscribeAudio)
 		})
 	})
 
@@ -235,24 +251,23 @@ func main() {
 
 	// Graceful shutdown
 	go func() {
-		log.Println("Server starting on :8080")
+		log.Printf("Server starting on :%s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
 	// Wait for interrupt signal
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	<-sigChan
 
-	log.Println("Server shutting down...")
+	log.Println("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		log.Fatalf("Server shutdown failed: %v", err)
 	}
-
-	log.Println("Server stopped")
+	log.Println("Server stopped gracefully")
 }

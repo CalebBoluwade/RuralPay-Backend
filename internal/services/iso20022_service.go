@@ -14,12 +14,14 @@ import (
 )
 
 type ISO20022Service struct {
-	validator *ValidationHelper
+	validator   *ValidationHelper
+	nibssClient *NIBSSClient
 }
 
 func NewISO20022Service() *ISO20022Service {
 	return &ISO20022Service{
-		validator: NewValidationHelper(),
+		validator:   NewValidationHelper(),
+		nibssClient: NewNIBSSClient(),
 	}
 }
 
@@ -38,7 +40,7 @@ func (iso *ISO20022Service) ConvertToISO20022(w http.ResponseWriter, r *http.Req
 
 	var req models.Transaction
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -83,7 +85,7 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 
 	var req models.Transaction
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -100,7 +102,7 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 	}
 
 	// Send to settlement
-	err = iso.SendToSettlement(pacs002)
+	resp, err := iso.SendToSettlement(pacs002)
 	if err != nil {
 		SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
 		return
@@ -109,6 +111,7 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":      "settled",
 		"messageType": "pacs.002.001.08",
+		"response":    resp,
 	})
 }
 
@@ -116,16 +119,28 @@ func (iso *ISO20022Service) ConvertTransaction(tx *models.Transaction) (*pacs_v0
 	return iso.CreatePacs008(tx)
 }
 
-func (iso *ISO20022Service) SendToSettlement(doc any) error {
-	// Convert to XML and send to settlement system
-	xmlData, err := xml.MarshalIndent(doc, "", "  ")
+func (iso *ISO20022Service) SendToSettlement(doc any) (FundsTransferSettlementResponse, error) {
+	// Convert to XML
+	xmlData, err := iso.ConvertToXML(doc)
 	if err != nil {
-		return fmt.Errorf("failed to marshal XML: %w", err)
+		return FundsTransferSettlementResponse{}, fmt.Errorf("failed to convert to XML: %w", err)
 	}
 
-	// TODO: Implement actual settlement system integration
-	fmt.Printf("Sending to settlement: %s\n", string(xmlData))
-	return nil
+	v, err := iso.nibssClient.ProcessFundsTransferSettlement([]byte(xmlData))
+	if err != nil {
+		return FundsTransferSettlementResponse{}, fmt.Errorf("failed to send to settlement: %w", err)
+	}
+
+	if v == nil {
+		return FundsTransferSettlementResponse{}, fmt.Errorf("failed to send to settlement: no response")
+	}
+
+	if v.Status != "ACCP" && v.Status != "ACSC" {
+		return FundsTransferSettlementResponse{}, fmt.Errorf("settlement failed with status: %s, message: %s", v.Status, v.Message)
+	}
+
+	fmt.Printf("Settlement successful: TransactionID=%s, Date=%s\n", v.TransactionId, v.TransactionDate)
+	return *v, nil
 }
 
 // CreatePacs008 creates a pacs.008 FIToFICustomerCreditTransfer message
@@ -167,7 +182,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIT
 					},
 				},
 				Dbtr: pacs_v08.PartyIdentification135{
-					Nm: &[]common.Max140Text{common.Max140Text(tx.FromCardID)}[0],
+					Nm: &[]common.Max140Text{common.Max140Text(tx.FromAccountID)}[0],
 				},
 				CdtrAgt: pacs_v08.BranchAndFinancialInstitutionIdentification6{
 					FinInstnId: pacs_v08.FinancialInstitutionIdentification18{
@@ -177,7 +192,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIT
 					},
 				},
 				Cdtr: pacs_v08.PartyIdentification135{
-					Nm: &[]common.Max140Text{common.Max140Text(tx.ToCardID)}[0],
+					Nm: &[]common.Max140Text{common.Max140Text(tx.ToAccountID)}[0],
 				},
 			},
 		},

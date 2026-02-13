@@ -20,9 +20,9 @@ func NewQRHandler(service *services.QRService) *QRHandler {
 	}
 }
 
-// GenerateQR generates a QR code with amount
+// GenerateQR generates a QR Code
 // @Summary Generate QR Code
-// @Description Generate a QR code for payment with specified amount
+// @Description Generate a QR code for payment
 // @Tags QR
 // @Accept json
 // @Produce json
@@ -39,30 +39,26 @@ func (h *QRHandler) GenerateQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Amount int64 `json:"amount" validate:"required,gt=0"`
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
-	if err := dec.Decode(&req); err != nil {
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
-		return
-	}
+	// if err := dec.Decode(&req); err != nil {
+	// 	services.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+	// 	return
+	// }
 
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		services.SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
-		return
-	}
+	// if err := dec.Decode(&struct{}{}); err != io.EOF {
+	// 	services.SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+	// 	return
+	// }
 
-	if err := h.validator.ValidateStruct(&req); err != nil {
-		services.SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
-		return
-	}
+	// if err := h.validator.ValidateStruct(&req); err != nil {
+	// 	services.SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+	// 	return
+	// }
 
-	qrCode, qrImage, err := h.service.GenerateQRCode(r.Context(), userID, req.Amount)
+	qrCode, qrImage, err := h.service.GenerateQRCode(r.Context(), userID)
 	if err != nil {
 		services.SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
 		return
@@ -97,7 +93,7 @@ func (h *QRHandler) ProcessQR(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(&req); err != nil {
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		services.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 

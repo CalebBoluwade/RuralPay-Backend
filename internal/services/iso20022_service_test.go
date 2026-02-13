@@ -18,10 +18,10 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 		tx := models.Transaction{
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
-			FromCardID:    "card123",
-			ToCardID:      "merchant123",
+			FromAccountID: "card123",
+			ToAccountID:   "merchant123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 			Status:        "PENDING",
 		}
 
@@ -39,7 +39,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 		assert.NotEmpty(t, response["xml"])
 	})
 
-	t.Run("invalid request body", func(t *testing.T) {
+	t.Run("Unable To Process This Request At This Time", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/iso20022/convert", bytes.NewBuffer([]byte("invalid")))
 		w := httptest.NewRecorder()
 
@@ -52,7 +52,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 		tx := models.Transaction{
 			// Missing required fields to trigger validation
 			Amount:   100.50,
-			Currency: "USD",
+			Currency: "NGN",
 		}
 
 		body, _ := json.Marshal(tx)
@@ -73,10 +73,10 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 		tx := models.Transaction{
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
-			FromCardID:    "card123",
-			ToCardID:      "merchant123",
+			FromAccountID: "card123",
+			ToAccountID:   "merchant123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 			Status:        "PENDING",
 		}
 
@@ -93,7 +93,7 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 		assert.Equal(t, "pacs.002.001.08", response["messageType"])
 	})
 
-	t.Run("invalid request body", func(t *testing.T) {
+	t.Run("Unable To Process This Request At This Time", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/iso20022/settlement", bytes.NewBuffer([]byte("invalid")))
 		w := httptest.NewRecorder()
 
@@ -110,10 +110,10 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
-			FromCardID:    "card123",
-			ToCardID:      "merchant123",
+			FromAccountID: "card123",
+			ToAccountID:   "merchant123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 		}
 
 		doc, err := service.CreatePacs008(tx)
@@ -121,7 +121,7 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 		assert.NotNil(t, doc)
 		assert.NotEmpty(t, doc.GrpHdr.MsgId)
 		assert.Equal(t, "1", string(doc.GrpHdr.NbOfTxs))
-		assert.Equal(t, "USD", string(doc.GrpHdr.TtlIntrBkSttlmAmt.Ccy))
+		assert.Equal(t, "NGN", string(doc.GrpHdr.TtlIntrBkSttlmAmt.Ccy))
 		assert.Equal(t, tx.Amount, doc.GrpHdr.TtlIntrBkSttlmAmt.Value)
 		assert.Len(t, doc.CdtTrfTxInf, 1)
 		assert.Equal(t, string(*doc.CdtTrfTxInf[0].PmtId.InstrId), tx.TransactionID)
@@ -157,7 +157,7 @@ func TestISO20022Service_ConvertToXML(t *testing.T) {
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 		}
 
 		doc, err := service.CreatePacs008(tx)
@@ -168,7 +168,7 @@ func TestISO20022Service_ConvertToXML(t *testing.T) {
 		assert.NotEmpty(t, xmlString)
 		assert.Contains(t, xmlString, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
 		assert.Contains(t, xmlString, "tx123")
-		assert.Contains(t, xmlString, "USD")
+		assert.Contains(t, xmlString, "NGN")
 	})
 
 	t.Run("convert invalid struct", func(t *testing.T) {
@@ -190,13 +190,13 @@ func TestISO20022Service_ConvertTransaction(t *testing.T) {
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 		}
 
 		doc, err := service.ConvertTransaction(tx)
 		assert.NoError(t, err)
 		assert.NotNil(t, doc)
-		assert.Equal(t, "USD", string(doc.GrpHdr.TtlIntrBkSttlmAmt.Ccy))
+		assert.Equal(t, "NGN", string(doc.GrpHdr.TtlIntrBkSttlmAmt.Ccy))
 		assert.Equal(t, tx.Amount, doc.GrpHdr.TtlIntrBkSttlmAmt.Value)
 	})
 }
@@ -209,14 +209,14 @@ func TestISO20022Service_SendToSettlement(t *testing.T) {
 			TransactionID: "tx123",
 			ReferenceID:   "ref123",
 			Amount:        100.50,
-			Currency:      "USD",
+			Currency:      "NGN",
 		}
 
 		doc, err := service.CreatePacs008(tx)
 		assert.NoError(t, err)
 
 		// This should not error as it's just a mock implementation
-		err = service.SendToSettlement(doc)
+		_, err = service.SendToSettlement(doc)
 		assert.NoError(t, err)
 	})
 
@@ -224,7 +224,7 @@ func TestISO20022Service_SendToSettlement(t *testing.T) {
 		// Test with a struct that can't be marshaled to XML
 		invalidDoc := make(chan int)
 
-		err := service.SendToSettlement(invalidDoc)
+		_, err := service.SendToSettlement(invalidDoc)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to marshal XML")
 	})

@@ -55,7 +55,7 @@ func (h *USSDHandler) GenerateCode(w http.ResponseWriter, r *http.Request) {
 
 	if err := dec.Decode(&req); err != nil {
 		log.Printf("[USSD] GenerateCode - Decode error: %v", err)
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		services.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *USSDHandler) ValidateCode(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(&req); err != nil {
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		services.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 

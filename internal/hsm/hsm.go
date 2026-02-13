@@ -15,9 +15,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +57,9 @@ type HSMInterface interface {
 	// PIN Operations
 	HashPIN(pin string, salt []byte) (string, error)
 	VerifyPIN(pin string, hashedPIN string) (bool, error)
+
+	// PII Operations
+	DecryptPII(encryptedData string) (string, error)
 }
 
 // HSMServer implements HSMInterface
@@ -88,12 +93,12 @@ type CardData struct {
 
 // Transaction for signing
 type Transaction struct {
-	ID         string    `json:"id"`
-	FromCardID string    `json:"from_card_id"`
-	ToCardID   string    `json:"to_card_id"`
-	Amount     float64   `json:"amount"`
-	Timestamp  time.Time `json:"timestamp"`
-	Nonce      string    `json:"nonce"`
+	ID            string    `json:"id"`
+	FromAccountID string    `json:"from_account_id"`
+	ToAccountID   string    `json:"to_account_id"`
+	Amount        float64   `json:"amount"`
+	Timestamp     time.Time `json:"timestamp"`
+	Nonce         string    `json:"nonce"`
 }
 
 // Config holds HSM configuration
@@ -110,6 +115,8 @@ func InitHSM(config Config) (*HSMServer, error) {
 	if config.MasterKey == "" {
 		return nil, errors.New("Master Key Required")
 	}
+
+	log.Println("HSM Initialized Successfully")
 
 	// Generate or use provided salt
 	salt := config.Salt
@@ -142,7 +149,6 @@ func InitHSM(config Config) (*HSMServer, error) {
 		}
 	}
 
-	hsm.auditLogger.LogTransfer("HSM_INIT", "system", "system", 0, "HSM initialized successfully")
 	return hsm, nil
 }
 
@@ -399,15 +405,10 @@ func (h *HSMServer) GenerateTransactionID() string {
 // SignTransaction signs a transaction
 func (h *HSMServer) SignTransaction(transaction *Transaction) (string, error) {
 	// Create data to sign
-	data := fmt.Sprintf("%s:%s:%s:%.2f:%s:%s",
-		transaction.ID,
-		transaction.FromCardID,
-		transaction.ToCardID,
-		transaction.Amount,
-		transaction.Timestamp.Format(time.RFC3339),
-		transaction.Nonce,
-	)
-
+	data, err := json.Marshal(transaction)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal transaction for signing: %w", err)
+	}
 	// Sign with transaction key
 	signature, err := h.SignData("transaction_signing", []byte(data))
 	if err != nil {
@@ -420,15 +421,10 @@ func (h *HSMServer) SignTransaction(transaction *Transaction) (string, error) {
 // VerifyTransaction verifies transaction signature
 func (h *HSMServer) VerifyTransaction(transaction *Transaction, signature string) (bool, error) {
 	// Create data to verify
-	data := fmt.Sprintf("%s:%s:%s:%.2f:%s:%s",
-		transaction.ID,
-		transaction.FromCardID,
-		transaction.ToCardID,
-		transaction.Amount,
-		transaction.Timestamp.Format(time.RFC3339),
-		transaction.Nonce,
-	)
-
+	data, err := json.Marshal(transaction)
+	if err != nil {
+		return false, fmt.Errorf("failed to marshal transaction for verification: %w", err)
+	}
 	// Decode signature
 	sigBytes, err := base64.StdEncoding.DecodeString(signature)
 	if err != nil {
@@ -436,7 +432,42 @@ func (h *HSMServer) VerifyTransaction(transaction *Transaction, signature string
 	}
 
 	// Verify signature
-	return h.VerifySignature("transaction_signing", []byte(data), sigBytes)
+	if valid, _ := h.VerifySignature("transaction_signing", []byte(data), sigBytes); valid {
+		return true, nil
+	}
+
+	// If primary key fails, try archived keys (fallback for rotated keys)
+	var archivedKeys []string
+	h.mu.RLock()
+	for k := range h.keys {
+		if strings.HasPrefix(k, "transaction_signing_") {
+			archivedKeys = append(archivedKeys, k)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, keyID := range archivedKeys {
+		if valid, _ := h.VerifySignature(keyID, []byte(data), sigBytes); valid {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// DecryptPII decrypts PII data using the user_encryption key
+func (h *HSMServer) DecryptPII(encryptedData string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encryptedData)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64 PII data: %w", err)
+	}
+
+	decrypted, err := h.DecryptData("user_encryption", data)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt PII: %w", err)
+	}
+
+	return string(decrypted), nil
 }
 
 // HashPIN hashes a PIN using Argon2
@@ -487,27 +518,41 @@ func (h *HSMServer) RotateKeys() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// Collect keys to rotate first to avoid modifying map during iteration
 	var rotated []string
+	var keysToRotate []string
 	now := time.Now()
 
 	for keyID, keyPair := range h.keys {
-		// Rotate if expired or due for rotation
-		if now.After(keyPair.ExpiresAt) || !keyPair.IsActive {
-			// Generate new key
-			newKeyID := fmt.Sprintf("%s_%d", keyID, now.Unix())
-			newKeyPair, err := h.generateKeyPairInternal(newKeyID)
-			if err != nil {
-				h.auditLogger.LogError(keyID, keyID, err)
-				continue
-			}
-
-			// Mark old key as inactive
-			keyPair.IsActive = false
-			h.keys[newKeyID] = newKeyPair
-			rotated = append(rotated, keyID)
-
-			h.auditLogger.LogTransfer("KEY_ROTATED", keyID, newKeyID, 0, "Key rotated")
+		// Only rotate base keys (not archived ones) that are expired or inactive
+		if (now.After(keyPair.ExpiresAt) || !keyPair.IsActive) && !strings.Contains(keyID, "_1") {
+			keysToRotate = append(keysToRotate, keyID)
 		}
+	}
+
+	for _, keyID := range keysToRotate {
+		oldKeyPair := h.keys[keyID]
+
+		// 1. Archive the old key
+		archiveID := fmt.Sprintf("%s_%d", keyID, now.Unix())
+		archivedKey := *oldKeyPair // Shallow copy
+		archivedKey.ID = archiveID
+		archivedKey.IsActive = false // Archived keys cannot be used for new signing
+		h.keys[archiveID] = &archivedKey
+		h.saveKeyToDisk(&archivedKey)
+
+		// 2. Generate new key for the base ID
+		newKeyPair, err := h.generateKeyPairInternal(keyID)
+		if err != nil {
+			h.auditLogger.LogError(keyID, keyID, err)
+			continue
+		}
+		h.keys[keyID] = newKeyPair
+		h.saveKeyToDisk(newKeyPair)
+
+		rotated = append(rotated, keyID)
+
+		h.auditLogger.LogTransfer("KEY_ROTATED", keyID, archiveID, 0, "Key rotated")
 	}
 
 	h.auditLogger.LogTransfer("KEY_ROTATION_COMPLETE", "system", "system", int64(len(rotated)), "Key rotation complete")

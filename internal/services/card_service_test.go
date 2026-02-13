@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCardProvisioningService_ProvisionCard(t *testing.T) {
+func TestCardService_ProvisionCard(t *testing.T) {
 	db, _, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
 	mockHSM := &MockHSM{}
-	service := NewCardProvisioningService(db, mockHSM)
+	service := NewCardService(db, mockHSM)
 
-	t.Run("successful provisioning", func(t *testing.T) {
+	t.Run("successful ", func(t *testing.T) {
 		req := ProvisionRequest{
 			UserID:         1,
 			CardType:       "DEBIT",
@@ -55,7 +55,7 @@ func TestCardProvisioningService_ProvisionCard(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("invalid request body", func(t *testing.T) {
+	t.Run("Unable To Process This Request At This Time", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/cards/provision", bytes.NewBuffer([]byte("invalid")))
 		w := httptest.NewRecorder()
 
@@ -65,13 +65,13 @@ func TestCardProvisioningService_ProvisionCard(t *testing.T) {
 	})
 }
 
-func TestCardProvisioningService_ActivateCard(t *testing.T) {
+func TestCardService_ActivateCard(t *testing.T) {
 	db, _, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
 	mockHSM := &MockHSM{}
-	service := NewCardProvisioningService(db, mockHSM)
+	service := NewCardService(db, mockHSM)
 
 	t.Run("successful activation", func(t *testing.T) {
 		req := ActivationRequest{
@@ -107,13 +107,13 @@ func TestCardProvisioningService_ActivateCard(t *testing.T) {
 	})
 }
 
-func TestCardProvisioningService_GetCard(t *testing.T) {
+func TestCardService_GetCard(t *testing.T) {
 	db, _, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
 	mockHSM := &MockHSM{}
-	service := NewCardProvisioningService(db, mockHSM)
+	service := NewCardService(db, mockHSM)
 
 	r := chi.NewRouter()
 	r.Get("/cards/{cardId}", service.GetCard)
@@ -130,13 +130,13 @@ func TestCardProvisioningService_GetCard(t *testing.T) {
 	assert.Equal(t, "active", response["status"])
 }
 
-func TestCardProvisioningService_SuspendCard(t *testing.T) {
+func TestCardService_SuspendCard(t *testing.T) {
 	db, _, err := sqlmock.New()
 	assert.NoError(t, err)
 	defer db.Close()
 
 	mockHSM := &MockHSM{}
-	service := NewCardProvisioningService(db, mockHSM)
+	service := NewCardService(db, mockHSM)
 
 	r := chi.NewRouter()
 	r.Put("/cards/{cardId}/suspend", service.SuspendCard)
@@ -151,27 +151,4 @@ func TestCardProvisioningService_SuspendCard(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &response)
 	assert.Equal(t, "card123", response["cardId"])
 	assert.Equal(t, "suspended", response["status"])
-}
-
-func TestCardProvisioningService_ReinstateCard(t *testing.T) {
-	db, _, err := sqlmock.New()
-	assert.NoError(t, err)
-	defer db.Close()
-
-	mockHSM := &MockHSM{}
-	service := NewCardProvisioningService(db, mockHSM)
-
-	r := chi.NewRouter()
-	r.Put("/cards/{cardId}/reinstate", service.ReinstateCard)
-
-	req := httptest.NewRequest("PUT", "/cards/card123/reinstate", nil)
-	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	var response map[string]string
-	json.Unmarshal(w.Body.Bytes(), &response)
-	assert.Equal(t, "card123", response["cardId"])
-	assert.Equal(t, "active", response["status"])
 }

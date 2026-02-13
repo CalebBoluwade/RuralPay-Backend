@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 
 	"github.com/go-playground/validator/v10"
 )
 
 // ErrorResponse represents error response structure
 type ErrorResponse struct {
-	Error   string            `json:"error"`             // Error message
+	Error   string            `json:"errorMessage"` // Error message
+	Success bool              `json:"success"`
 	Details map[string]string `json:"details,omitempty"` // Validation details
 }
 
@@ -36,7 +38,7 @@ func SendErrorResponse(w http.ResponseWriter, message string, statusCode int, va
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	errorResp := ErrorResponse{Error: message}
+	errorResp := ErrorResponse{Error: message, Success: false}
 	if validationErr != nil {
 		errorResp.Details = make(map[string]string)
 		for _, err := range validationErr.(validator.ValidationErrors) {
@@ -45,4 +47,18 @@ func SendErrorResponse(w http.ResponseWriter, message string, statusCode int, va
 	}
 
 	json.NewEncoder(w).Encode(errorResp)
+}
+
+// Account validation helpers
+var (
+	accountIdRegex = regexp.MustCompile(`^[0-9]{10,20}$`)
+	bankCodeRegex  = regexp.MustCompile(`^[0-9A-Za-z]{3,6}$`)
+)
+
+func IsValidAccountId(s string) bool {
+	return accountIdRegex.MatchString(s)
+}
+
+func IsValidBankCode(s string) bool {
+	return bankCodeRegex.MatchString(s)
 }

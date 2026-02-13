@@ -1,31 +1,130 @@
 package models
 
 import (
+	"context"
+	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/moov-io/iso8583"
+	"github.com/ruralpay/backend/internal/hsm"
 )
 
-// Card represents an NFC card
-type Card struct {
-	ID                int        `json:"id" db:"id"`
-	CardID            string     `json:"card_id" db:"card_id"`
-	UserID            int        `json:"user_id" db:"user_id"`
-	SerialNumber      string     `json:"serial_number" db:"serial_number"`
-	Balance           float64    `json:"balance" db:"balance"`
-	Currency          string     `json:"currency" db:"currency"`
-	Status            string     `json:"status" db:"status"`
-	CardType          string     `json:"card_type" db:"card_type"`
-	LastSyncAt        *time.Time `json:"last_sync_at" db:"last_sync_at"`
-	LastTransactionAt *time.Time `json:"last_transaction_at" db:"last_transaction_at"`
-	TxCounter         int        `json:"tx_counter" db:"tx_counter"`
-	MaxBalance        float64    `json:"max_balance" db:"max_balance"`
-	DailySpent        float64    `json:"daily_spent" db:"daily_spent"`
-	Metadata          Metadata   `json:"metadata" db:"metadata"`
-	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
-	ExpiresAt         *time.Time `json:"expires_at" db:"expires_at"`
+type BINResponse struct {
+	BIN        string `json:"bin"`
+	Scheme     string `json:"scheme"`      // Visa, Mastercard, Verve
+	IssuerBank string `json:"issuer_bank"` // GTBank, Zenith, etc.
+	Type       string `json:"type"`        // Debit, Credit
+	Country    string `json:"country"`     // NG, US
+	Currency   string `json:"currency"`    // NGN, USD
+	Source     string `json:"source"`      // "internal" or "external"
+}
+
+type CardInfo struct {
+	// BIN           string `json:"bin"`
+	// Scheme        string `json:"scheme"` // Visa, Mastercard, Verve
+	EncryptedPAN  string `json:"PAN"`
+	EncryptedPIN  string `json:"PIN"`
+	ExpiryDate    string `json:"expiryDate"`
+	ATC           int    `json:"ATC"`
+	CVR           string `json:"CVR"`
+	IssuerAppData string `json:"issuerAppData"`
+	CountryCode   string `json:"countryCode"`
+}
+
+type CardPaymentRequest struct {
+	TransactionID   string      `json:"transactionID"`
+	TransactionDate int64       `json:"transactionDate"`
+	MerchantID      string      `json:"merchantId"`
+	Amount          int64       `json:"amount"`
+	PaymentMode     PaymentMode `json:"paymentMode"`
+	CardInfo        CardInfo    `json:"cardInfo"`
+	TxType          string      `json:"txType"`
+	Location        *Location   `json:"location,omitempty"`
+}
+
+type ISO8583ServiceImpl struct {
+	db  *sql.DB
+	hsm hsm.HSMInterface
+}
+
+type ISO8583Service interface {
+	BuildISO8583Message(cardReq *CardPaymentRequest) ([]byte, error)
+	ProcessMessage(ctx context.Context, rawMsg []byte) ([]byte, error)
+	BuildAuthorizationResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
+	BuildFinancialResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
+}
+
+type AuthorizationRequest struct {
+	PAN              string
+	ProcessingCode   string
+	Amount           int64
+	TransmissionTime time.Time
+	STAN             string
+	MerchantType     string
+	AcquirerID       string
+	ForwardingID     string
+	Track2Data       string
+	RRN              string
+	TerminalID       string
+	MerchantID       string
+	AdditionalData   string
+}
+
+type AuthorizationResponse struct {
+	ResponseCode      string
+	AuthorizationCode string
+	TransactionID     string
+	STAN              string
+	RRN               string
+	ResponseMessage   string
+	Timestamp         time.Time
+}
+
+type FinancialRequest struct {
+	PAN               string
+	ProcessingCode    string
+	Amount            int64
+	TransmissionTime  time.Time
+	STAN              string
+	MerchantType      string
+	AcquirerID        string
+	RRN               string
+	AuthorizationCode string
+	TerminalID        string
+	MerchantID        string
+	AdditionalData    string
+}
+
+type FinancialResponse struct {
+	ResponseCode    string
+	TransactionID   string
+	STAN            string
+	RRN             string
+	ResponseMessage string
+	Timestamp       time.Time
+}
+
+type ReversalRequest struct {
+	PAN              string
+	Amount           int64
+	TransmissionTime time.Time
+	STAN             string
+	OriginalSTAN     string
+	OriginalRRN      string
+	AcquirerID       string
+	TerminalID       string
+	MerchantID       string
+}
+
+type ReversalResponse struct {
+	ResponseCode    string
+	STAN            string
+	RRN             string
+	ResponseMessage string
+	Timestamp       time.Time
 }
 
 // CardSyncRequest represents card sync data from mobile
@@ -81,9 +180,6 @@ const (
 	CardStatusLost     = "lost"
 	CardStatusExpired  = "expired"
 )
-
-// Metadata type for JSONB fields
-type Metadata map[string]any
 
 // Value implements driver.Valuer for Metadata
 func (m Metadata) Value() (driver.Value, error) {

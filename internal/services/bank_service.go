@@ -9,10 +9,13 @@ import (
 )
 
 type Bank struct {
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	LogoData string `json:"logoData"`
+	Code             string  `json:"code"`
+	Name             string  `json:"name"`
+	LogoData         string  `json:"logoData"`
+	UptimePrediction float64 `json:"uptimePrediction"`
 }
+
+var svgFormat = "data:image/svg+xml;base64,"
 
 const (
 	logosDir = "./static/bank-logos"
@@ -30,8 +33,8 @@ var bankLogos = map[string]string{
 	"011":    "firstbank.svg",
 	"214":    "fcmb.svg",
 	"00103":  "globus.svg",
+	"012345": "pocketapp.svg",
 	"058":    "gtbank.svg",
-	"030":    "heritage.svg",
 	"301":    "jaiz.svg",
 	"082":    "keystone.svg",
 	"526":    "parallex.svg",
@@ -141,6 +144,7 @@ func (bs *BankService) GetAllBanks(w http.ResponseWriter, r *http.Request) {
 
 	for i := range banks {
 		banks[i].LogoData = bs.LoadLogo(banks[i].Code)
+		banks[i].UptimePrediction = bs.PredictUptime(banks[i].Code)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -151,13 +155,30 @@ func (bs *BankService) GetAllBanks(w http.ResponseWriter, r *http.Request) {
 func (bs *BankService) LoadLogo(code string) string {
 	filename, ok := bankLogos[code]
 	if !ok {
-		return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(demoSVG))
+		return svgFormat + base64.StdEncoding.EncodeToString([]byte(demoSVG))
 	}
 
 	path := filepath.Join(logosDir, filename)
 	if data, err := os.ReadFile(path); err == nil {
-		return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(data)
+		return svgFormat + base64.StdEncoding.EncodeToString(data)
 	}
 
-	return "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(demoSVG))
+	return svgFormat + base64.StdEncoding.EncodeToString([]byte(demoSVG))
+}
+
+func (bs *BankService) PredictUptime(code string) float64 {
+	tier1 := map[string]bool{"044": true, "063": true, "011": true, "058": true, "057": true, "033": true, "070": true, "214": true, "221": true, "232": true}
+	tier2 := map[string]bool{"023": true, "050": true, "068": true, "032": true, "035": true, "076": true, "101": true, "102": true, "00103": true, "304": true}
+	digital := map[string]bool{"50211": true, "090267": true, "090405": true, "100002": true, "110005": true}
+
+	if tier1[code] {
+		return 99.5
+	}
+	if tier2[code] {
+		return 98.8
+	}
+	if digital[code] {
+		return 99.2
+	}
+	return 97.5
 }

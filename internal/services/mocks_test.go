@@ -109,6 +109,11 @@ func (m *MockHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 	return args.Bool(0), args.Error(1)
 }
 
+func (m *MockHSM) DecryptPII(encryptedData string) (string, error) {
+	args := m.Called(encryptedData)
+	return args.String(0), args.Error(1)
+}
+
 type MockAuditLogger struct {
 	mock.Mock
 }

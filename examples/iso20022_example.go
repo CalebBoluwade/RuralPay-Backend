@@ -17,15 +17,15 @@ func main() {
 	tx := &models.Transaction{
 		TransactionID: "TXN123456789",
 		ReferenceID:   "REF987654321",
-		FromCardID:    "CARD001",
-		ToCardID:      "CARD002",
+		FromAccountID: "CARD001",
+		ToAccountID:   "CARD002",
 		Amount:        250.75,
-		Currency:      "USD",
+		Currency:      "NGN",
 		Status:        "PENDING",
 	}
 
 	fmt.Println("=== Creating pacs.008 (FI to FI Customer Credit Transfer) ===")
-	
+
 	// Create pacs.008 message
 	pacs008, err := iso20022Service.CreatePacs008(tx)
 	if err != nil {
@@ -41,7 +41,7 @@ func main() {
 	fmt.Printf("pacs.008 XML:\n%s\n\n", xml.Header+string(xmlData))
 
 	fmt.Println("=== Creating pacs.002 (Payment Status Report) ===")
-	
+
 	// Create pacs.002 status report
 	pacs002, err := iso20022Service.CreatePacs002(tx, "ACCP")
 	if err != nil {
@@ -57,7 +57,7 @@ func main() {
 	fmt.Printf("pacs.002 XML:\n%s\n\n", xml.Header+string(xmlData2))
 
 	fmt.Println("=== Sending to Settlement ===")
-	
+
 	// Send to settlement system
 	err = iso20022Service.SendToSettlement(pacs008)
 	if err != nil {

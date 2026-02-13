@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-redis/redis/v8"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
@@ -27,7 +28,8 @@ func TestAuthService_Register(t *testing.T) {
 	viper.Set("jwt.secret_key", "test-secret")
 	viper.Set("jwt.expiry_hours", 24)
 
-	service := NewAuthService(db)
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	service := NewAuthService(db, redisClient)
 
 	t.Run("successful registration", func(t *testing.T) {
 		req := RegisterRequest{
@@ -54,7 +56,7 @@ func TestAuthService_Register(t *testing.T) {
 		assert.Equal(t, req.Email, response.User.Email)
 	})
 
-	t.Run("invalid request body", func(t *testing.T) {
+	t.Run("Unable To Process This Request At This Time", func(t *testing.T) {
 		r := httptest.NewRequest("POST", "/auth/register", bytes.NewBuffer([]byte("invalid")))
 		w := httptest.NewRecorder()
 
@@ -72,7 +74,8 @@ func TestAuthService_Login(t *testing.T) {
 	viper.Set("jwt.secret_key", "test-secret")
 	viper.Set("jwt.expiry_hours", 24)
 
-	service := NewAuthService(db)
+	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	service := NewAuthService(db, redisClient)
 
 	t.Run("successful login", func(t *testing.T) {
 		hashedPassword, _ := hashPassword("password123")
@@ -83,8 +86,8 @@ func TestAuthService_Login(t *testing.T) {
 				AddRow(1, "test@example.com", "John", "Doe", hashedPassword))
 
 		req := LoginRequest{
-			PhoneNumber: "4359502429542",
-			Password:    "password123",
+			Identifier: "4359502429542",
+			Password:   "password123",
 		}
 
 		body, _ := json.Marshal(req)
@@ -105,8 +108,8 @@ func TestAuthService_Login(t *testing.T) {
 			WillReturnError(sql.ErrNoRows)
 
 		req := LoginRequest{
-			PhoneNumber: "34324920424942",
-			Password:    "password123",
+			Identifier: "34324920424942",
+			Password:   "password123",
 		}
 
 		body, _ := json.Marshal(req)
@@ -140,7 +143,9 @@ func TestGenerateJWT(t *testing.T) {
 	viper.Set("jwt.secret_key", "test-secret")
 	viper.Set("jwt.expiry_hours", 24)
 
-	token, err := generateJWT(123)
+	merchantID := 1
+	merchantStatus := "active"
+	token, err := generateJWT(123, &merchantID, &merchantStatus)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
 }

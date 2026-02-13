@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS cards (
     user_id INTEGER NOT NULL REFERENCES users(id),
     serial_number VARCHAR(255) UNIQUE NOT NULL,
     balance DECIMAL(15,2) NOT NULL DEFAULT 0.00,
-    currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+    currency VARCHAR(3) NOT NULL DEFAULT 'NGN',
     status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'blocked', 'lost', 'expired')),
     card_type VARCHAR(50) NOT NULL DEFAULT 'standard',
     last_sync_at TIMESTAMP,
