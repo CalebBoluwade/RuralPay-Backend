@@ -48,13 +48,13 @@ func NewPaymentHandler(db *sql.DB, redis *redis.Client, hsm hsm.HSMInterface) *P
 // @Router /payments [post]
 // @Security BearerAuth
 func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[PaymentHandler] Incoming request: method=%s, path=%s, remote=%s", r.Method, r.URL.Path, r.RemoteAddr)
+	log.Printf("[PaymentHandler] Incoming Request: [Method]=%s, [Path]=%s, [SourceIP]=%s", r.Method, r.URL.Path, r.RemoteAddr)
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("[PaymentHandler] Error reading request body: %v", err)
-		services.SendErrorResponse(w, "Unable to process this request at this time", http.StatusBadRequest, nil)
+		services.SendErrorResponse(w, "Unable to Process this request at this time", http.StatusBadRequest, nil)
 		return
 	}
 	log.Printf("[PaymentHandler] Request body received: %s", string(body))
@@ -65,23 +65,23 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
 		return
 	}
-	log.Printf("[PaymentHandler] Parsed request: paymentMode=%s", req.PaymentMode)
+	log.Printf("[PaymentHandler] [Payment Mode]=%s", req.PaymentMode)
 
 	if req.PaymentMode == "" {
-		log.Printf("[PaymentHandler] Missing paymentMode in request, body: %s", string(body))
-		services.SendErrorResponse(w, "paymentMode is required", http.StatusBadRequest, nil)
+		log.Printf("[PaymentHandler] Missing Payment Mode in request, body: %s", string(body))
+		services.SendErrorResponse(w, "Payment Mode is required", http.StatusBadRequest, nil)
 		return
 	}
 
 	provider, exists := h.providerMap[req.PaymentMode]
 	if !exists {
-		log.Printf("[PaymentHandler] Invalid payment mode: %s", req.PaymentMode)
-		services.SendErrorResponse(w, "Invalid payment mode", http.StatusBadRequest, nil)
+		log.Printf("[PaymentHandler] Invalid Payment Mode: %s", req.PaymentMode)
+		services.SendErrorResponse(w, "Invalid Payment Mode", http.StatusBadRequest, nil)
 		return
 	}
 
-	log.Printf("[PaymentHandler] Routing to provider: %s", req.PaymentMode)
+	log.Printf("[PaymentHandler] Routing Transaction [%s] to [%s] Provider", req.TransactionID, req.PaymentMode)
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 	provider.HandlePayment(w, r)
-	log.Printf("[PaymentHandler] Provider processing completed for: %s", req.PaymentMode)
+	log.Printf("[PaymentHandler] Provider Processing Completed --> Transaction [%s]: Payment Mode [%s]", req.TransactionID, req.PaymentMode)
 }

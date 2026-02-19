@@ -156,7 +156,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIT
 			NbOfTxs: "1",
 			TtlIntrBkSttlmAmt: &pacs_v08.ActiveCurrencyAndAmount{
 				Ccy:   common.ActiveCurrencyCode(tx.Currency),
-				Value: tx.Amount,
+				Value: float64(tx.Amount) / 100.0,
 			},
 			IntrBkSttlmDt: (*common.ISODate)(&settlementDate),
 			SttlmInf: pacs_v08.SettlementInstruction7{
@@ -167,12 +167,12 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIT
 			{
 				PmtId: pacs_v08.PaymentIdentification7{
 					InstrId:    &[]common.Max35Text{common.Max35Text(tx.TransactionID)}[0],
-					EndToEndId: common.Max35Text(tx.ReferenceID),
+					EndToEndId: common.Max35Text(tx.TransactionID),
 					TxId:       &[]common.Max35Text{common.Max35Text(tx.TransactionID)}[0],
 				},
 				IntrBkSttlmAmt: pacs_v08.ActiveCurrencyAndAmount{
 					Ccy:   common.ActiveCurrencyCode(tx.Currency),
-					Value: tx.Amount,
+					Value: float64(tx.Amount) / 100.0,
 				},
 				IntrBkSttlmDt: (*common.ISODate)(&settlementDate),
 				ChrgBr:        "SLEV",
@@ -214,7 +214,7 @@ func (iso *ISO20022Service) CreatePacs002(tx *models.Transaction, status string)
 		TxInfAndSts: []pacs_v08.PaymentTransaction80{
 			{
 				OrgnlInstrId:    &[]common.Max35Text{common.Max35Text(tx.TransactionID)}[0],
-				OrgnlEndToEndId: &[]common.Max35Text{common.Max35Text(tx.ReferenceID)}[0],
+				OrgnlEndToEndId: &[]common.Max35Text{common.Max35Text(tx.TransactionID)}[0],
 				OrgnlTxId:       &[]common.Max35Text{common.Max35Text(tx.TransactionID)}[0],
 				TxSts:           &[]pacs_v08.ExternalPaymentTransactionStatus1Code{pacs_v08.ExternalPaymentTransactionStatus1Code(status)}[0], // ACCP, RJCT, ACSC, etc.
 			},

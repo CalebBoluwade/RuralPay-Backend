@@ -37,8 +37,8 @@ type CardInfo struct {
 type CardPaymentRequest struct {
 	TransactionID   string      `json:"transactionID"`
 	TransactionDate int64       `json:"transactionDate"`
-	MerchantID      string      `json:"merchantId"`
-	Amount          int64       `json:"amount"`
+	MerchantID      string      `json:"merchantId" validate:"required,gt=0"`
+	Amount          int64       `json:"amount" validate:"required,gt=0"`
 	PaymentMode     PaymentMode `json:"paymentMode"`
 	CardInfo        CardInfo    `json:"cardInfo"`
 	TxType          string      `json:"txType"`

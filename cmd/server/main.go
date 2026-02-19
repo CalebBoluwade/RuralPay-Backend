@@ -59,6 +59,8 @@ func main() {
 	viper.BindEnv("hsm.key_store_path", "HSM_KEY_STORE_PATH")
 	viper.BindEnv("jwt.secret_key", "JWT_SECRET_KEY")
 	viper.BindEnv("jwt.expiry_hours", "JWT_EXPIRY_HOURS")
+	viper.BindEnv("jwt.issuer", "JWT_ISSUER")
+	viper.BindEnv("jwt.audience", "JWT_AUDIENCE")
 	viper.BindEnv("argon2.time", "ARGON2_TIME")
 	viper.BindEnv("argon2.memory", "ARGON2_MEMORY")
 	viper.BindEnv("argon2.threads", "ARGON2_THREADS")
@@ -82,7 +84,7 @@ func main() {
 
 	// Initialize Swagger docs
 	docs.SwaggerInfo.Title = "RuralPay Backend API"
-	docs.SwaggerInfo.Description = "API for NFC-based payment processing system"
+	docs.SwaggerInfo.Description = "Payment Processing API"
 	docs.SwaggerInfo.Version = "1.0"
 	docs.SwaggerInfo.Host = "localhost:8080"
 	docs.SwaggerInfo.BasePath = "/api/v1"
@@ -137,13 +139,13 @@ func main() {
 	qrHandler := handlers.NewQRHandler(qrService)
 
 	// Initialize auth middleware with Redis
-	mW.InitAuthMiddleware(redisClient)
+	mW.InitAuthMiddleware(redisClient, authService)
 
 	// Setup router
 	r := chi.NewRouter()
 
 	// Middleware
-	// r.Use(mW.SecurityHeaders)
+	r.Use(mW.SecurityHeaders)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
@@ -151,12 +153,12 @@ func main() {
 
 	// CORS
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   []string{"https://*.ruralpayments.com"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Access-Control-Allow-Origin"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
-		MaxAge:           86400,
+		MaxAge:           300,
 	}))
 
 	// Health check
@@ -209,6 +211,7 @@ func main() {
 			r.Get("/accounts/balance-enquiry", accountService.AccountBalanceEnquiry)
 			r.Put("/accounts/limits", accountService.UpdateUserLimits)
 			r.Post("/accounts/validate-bvn", accountService.ValidateBVN)
+			r.Get("/accounts/virtual-account", accountService.GetVirtualAccount)
 
 			// Card provisioning endpoints
 			r.Get("/cards/bins", cardService.QueryCardBin)
@@ -226,7 +229,7 @@ func main() {
 			// Merchant endpoints
 			r.Post(merchantRoute, merchantService.OnboardMerchant)
 			r.Put(merchantRoute, merchantService.UpdateMerchant)
-			r.Get(merchantRoute, merchantService.GetMerchant)
+			r.Get(merchantRoute, merchantService.GetMerchantData)
 			r.Get("/merchants/list", merchantService.ListMerchants)
 			r.Put("/merchants/status", merchantService.UpdateMerchantStatus)
 

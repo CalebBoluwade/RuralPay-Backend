@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS merchants (
     business_type VARCHAR(100) NOT NULL,
     tax_id VARCHAR(50) NOT NULL UNIQUE,
     account_id VARCHAR(10) NOT NULL,
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'suspended', 'rejected')),
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'ACTIVE', 'SUSPENDED', 'REJECTED')),
     commission_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00,
-    settlement_cycle VARCHAR(20) NOT NULL DEFAULT 'daily' CHECK (settlement_cycle IN ('daily', 'weekly', 'monthly')),
+    settlement_cycle VARCHAR(20) NOT NULL DEFAULT 'DAILY' CHECK (settlement_cycle IN ('DAILY', 'WEEKLY', 'MONTHLY')),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE(user_id)

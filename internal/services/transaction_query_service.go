@@ -271,7 +271,7 @@ func (s *TransactionQueryService) fetchTransactions(cardID, status, startDate, e
 
 func (s *TransactionQueryService) fetchRecentTransactions(userID string, limit int) ([]TransactionHistory, error) {
 	query := `
-		SELECT transaction_id, from_card_id, to_card_id, amount::text, currency, 
+		SELECT transaction_id, COALESCE(from_card_id, '') as from_card_id, COALESCE(to_card_id, '') as to_card_id, amount::text, currency, 
 		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee::text, status, COALESCE(narration, ''), created_at
 		FROM transactions
 		WHERE user_id = $1::integer

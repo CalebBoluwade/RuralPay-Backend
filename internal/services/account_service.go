@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,14 +63,14 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 
 	var req LinkAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		s.sendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
 		return
 	}
 
 	mandateResp, err := s.nibssClient.GetAccountMandate(req.BankCode, req.AccountNumber)
 	if err != nil {
 		log.Printf("[ACCOUNT] NIBSS mandate API failed: %v", err)
-		s.sendErrorResponse(w, "Failed to verify account", http.StatusBadGateway, nil)
+		s.sendErrorResponse(w, "Failed to Verify Account", http.StatusBadGateway, nil)
 		return
 	}
 
@@ -183,6 +184,21 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 	if bankCode != "" && !IsValidBankCode(bankCode) {
 		SendErrorResponse(w, "invalid bankCode format", http.StatusBadRequest, nil)
 		return
+	}
+
+	// Check virtual accounts in Redis first
+	if s.redis != nil {
+		if vaData, err := ValidateVirtualAccount(s.redis, accountId); err == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"success":     true,
+				"accountId":   accountId,
+				"accountName": vaData.AccountName,
+				"status":      "SUCCESS",
+				"source":      "virtual",
+			})
+			return
+		}
 	}
 
 	var accountName, status string
@@ -303,9 +319,9 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 		log.Printf("[BALANCE_ENQUIRY] Rows iteration error for user %d: %v", userIDInt, err)
 	}
 
-	log.Printf("[BALANCE_ENQUIRY] Processed %d rows, returning %d accounts for user %d", rowCount, len(accounts), userIDInt)
+	log.Printf("[BALANCE_ENQUIRY] Processed %d rows, Returning %d Accounts for user %d", rowCount, len(accounts), userIDInt)
 
-	log.Printf("[BALANCE_ENQUIRY] Returning User Accounts. [User] %d: %d Accounts, [DailyLimit]=%d, [SingleTxLimit]=%d, [DailySpent]=%d",
+	log.Printf("[BALANCE_ENQUIRY] Returning User Accounts. [User] %d: %d Accounts, [Daily Limit]=%d, [Single TxLimit]=%d, [Daily Spent]=%d",
 		userIDInt, len(accounts), dailyLimit, singleTxLimit, dailySpent)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -317,6 +333,106 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 		"dailySpent":             dailySpent,
 		"status":                 "SUCCESS",
 	})
+}
+
+// GetVirtualAccount retrieves or generates virtual account for merchant payments
+// @Summary Get virtual account
+// @Description Generate a temporary virtual account tied to merchant from JWT for payment collection
+// @Tags accounts
+// @Produce json
+// @Param amount query int64 false "Payment amount"
+// @Success 200 {object} object{responseCode=string,virtualAccount=object,expiresAt=string,status=string}
+// @Failure 401 {object} services.ErrorResponse
+// @Failure 403 {object} services.ErrorResponse
+// @Failure 500 {object} services.ErrorResponse
+// @Router /accounts/virtual-account [get]
+// @Security BearerAuth
+func (s *AccountService) GetVirtualAccount(w http.ResponseWriter, r *http.Request) {
+	merchantID := r.Context().Value("merchantID")
+	log.Printf("[VA_GEN] Request From [Merchant] --> %v", merchantID)
+
+	if merchantID == nil {
+		SendErrorResponse(w, "Only Merchants Generate Virtual Accounts", http.StatusForbidden, nil)
+		return
+	}
+
+	merchantIDStr := fmt.Sprintf("%v", merchantID)
+	log.Printf("[VA_GEN] Querying merchant: id=%s", merchantIDStr)
+
+	var merchantName, status string
+	err := s.db.QueryRow("SELECT business_name, status FROM merchants WHERE id = $1", merchantIDStr).Scan(&merchantName, &status)
+	if err == sql.ErrNoRows {
+		log.Printf("[VA_GEN] Merchant %s not found in database", merchantIDStr)
+		SendErrorResponse(w, "Merchant Not Found", http.StatusForbidden, nil)
+		return
+	}
+	if err != nil {
+		log.Printf("[VA_GEN] Database Error Querying Merchant %s: %v (type: %T)", merchantIDStr, err, err)
+		SendErrorResponse(w, "Database Error", http.StatusInternalServerError, nil)
+		return
+	}
+
+	log.Printf("[VA_GEN] Merchant Found: [MerchantID] --> %s, [Name] --> %s, [Status] --> %s", merchantIDStr, merchantName, status)
+
+	if status != "ACTIVE" {
+		log.Printf("[VA_GEN] Merchant %s is Not Active (STATUS=%s)", merchantIDStr, status)
+		SendErrorResponse(w, "Merchant not active", http.StatusForbidden, nil)
+		return
+	}
+
+	accountNumber := generateVirtualAccountNumber()
+	ttl := 3600
+	expiresAt := time.Now().Add(time.Duration(ttl) * time.Second)
+
+	vaData := VirtualAccountData{
+		AccountNumber: accountNumber,
+		AccountName:   merchantName,
+		BankName:      "RuralPay Bank",
+		// "bankCode":      "999999",
+		MerchantID: merchantIDStr,
+		ExpiresAt:  expiresAt.Unix(),
+	}
+
+	if amountStr := r.URL.Query().Get("amount"); amountStr != "" {
+		if amount, err := strconv.ParseInt(amountStr, 10, 64); err == nil {
+			vaData.Amount = amount
+			log.Printf("[VA_GEN] Amount Specified: %d", amount)
+		}
+	}
+
+	if s.redis != nil {
+		ctx := context.Background()
+		key := fmt.Sprintf("va:%s", accountNumber)
+		data, _ := json.Marshal(vaData)
+		if err := s.redis.Set(ctx, key, data, time.Duration(ttl)*time.Second).Err(); err != nil {
+			log.Printf("[VA_GEN] Failed to store VA in Redis: %v", err)
+			SendErrorResponse(w, "Failed to generate virtual account", http.StatusInternalServerError, nil)
+			return
+		}
+		log.Printf("[VA_GEN] Successfully Generated VA. [Merchant] --> `%s`, [AccountNo] --> `%s`, [TTL] -->  (TTL: %ds)", merchantIDStr, accountNumber, ttl)
+	} else {
+		log.Printf("[VA_GEN] Warning: Redis not available, VA not persisted")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"virtualAccount": VirtualAccountData{
+			AccountNumber: accountNumber,
+			AccountName:   merchantName,
+			BankName:      "RuralPay Bank",
+		},
+		"expiresAt": expiresAt.Format(time.RFC3339),
+		"status":    true,
+	})
+}
+
+func generateVirtualAccountNumber() string {
+	const digits = "0123456789"
+	b := make([]byte, 10)
+	for i := range b {
+		b[i] = digits[rand.Intn(len(digits))]
+	}
+	return string(b)
 }
 
 // UpdateUserLimits updates user transaction limits

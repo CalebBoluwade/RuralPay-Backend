@@ -17,10 +17,10 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 	t.Run("successful conversion", func(t *testing.T) {
 		tx := models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
+
 			FromAccountID: "card123",
 			ToAccountID:   "merchant123",
-			Amount:        100.50,
+			Amount:        10050,
 			Currency:      "NGN",
 			Status:        "PENDING",
 		}
@@ -51,7 +51,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 	t.Run("validation failure", func(t *testing.T) {
 		tx := models.Transaction{
 			// Missing required fields to trigger validation
-			Amount:   100.50,
+			Amount:   10050,
 			Currency: "NGN",
 		}
 
@@ -72,10 +72,10 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 	t.Run("successful settlement", func(t *testing.T) {
 		tx := models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
+
 			FromAccountID: "card123",
 			ToAccountID:   "merchant123",
-			Amount:        100.50,
+			Amount:        10050,
 			Currency:      "NGN",
 			Status:        "PENDING",
 		}
@@ -109,10 +109,10 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 	t.Run("create valid pacs008", func(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
+
 			FromAccountID: "card123",
 			ToAccountID:   "merchant123",
-			Amount:        100.50,
+			Amount:        10050,
 			Currency:      "NGN",
 		}
 
@@ -125,7 +125,7 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 		assert.Equal(t, tx.Amount, doc.GrpHdr.TtlIntrBkSttlmAmt.Value)
 		assert.Len(t, doc.CdtTrfTxInf, 1)
 		assert.Equal(t, string(*doc.CdtTrfTxInf[0].PmtId.InstrId), tx.TransactionID)
-		assert.Equal(t, string(doc.CdtTrfTxInf[0].PmtId.EndToEndId), tx.ReferenceID)
+		assert.Equal(t, string(doc.CdtTrfTxInf[0].PmtId.EndToEndId), tx.TransactionID)
 	})
 }
 
@@ -135,7 +135,6 @@ func TestISO20022Service_CreatePacs002(t *testing.T) {
 	t.Run("create valid pacs002", func(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
 		}
 
 		doc, err := service.CreatePacs002(tx, "ACCP")
@@ -144,7 +143,7 @@ func TestISO20022Service_CreatePacs002(t *testing.T) {
 		assert.NotEmpty(t, doc.GrpHdr.MsgId)
 		assert.Len(t, doc.TxInfAndSts, 1)
 		assert.Equal(t, string(*doc.TxInfAndSts[0].OrgnlInstrId), tx.TransactionID)
-		assert.Equal(t, string(*doc.TxInfAndSts[0].OrgnlEndToEndId), tx.ReferenceID)
+		assert.Equal(t, string(*doc.TxInfAndSts[0].OrgnlEndToEndId), tx.TransactionID)
 		assert.Equal(t, string(*doc.TxInfAndSts[0].TxSts), "ACCP")
 	})
 }
@@ -155,9 +154,9 @@ func TestISO20022Service_ConvertToXML(t *testing.T) {
 	t.Run("convert to XML", func(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
-			Amount:        100.50,
-			Currency:      "NGN",
+
+			Amount:   10050,
+			Currency: "NGN",
 		}
 
 		doc, err := service.CreatePacs008(tx)
@@ -188,8 +187,7 @@ func TestISO20022Service_ConvertTransaction(t *testing.T) {
 	t.Run("convert transaction", func(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
-			Amount:        100.50,
+			Amount:        10050,
 			Currency:      "NGN",
 		}
 
@@ -207,8 +205,7 @@ func TestISO20022Service_SendToSettlement(t *testing.T) {
 	t.Run("send to settlement", func(t *testing.T) {
 		tx := &models.Transaction{
 			TransactionID: "tx123",
-			ReferenceID:   "ref123",
-			Amount:        100.50,
+			Amount:        10050,
 			Currency:      "NGN",
 		}
 

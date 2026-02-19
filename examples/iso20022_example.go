@@ -16,10 +16,10 @@ func main() {
 	// Example transaction
 	tx := &models.Transaction{
 		TransactionID: "TXN123456789",
-		ReferenceID:   "REF987654321",
+		// ReferenceID:   "REF987654321",
 		FromAccountID: "CARD001",
 		ToAccountID:   "CARD002",
-		Amount:        250.75,
+		Amount:        25075,
 		Currency:      "NGN",
 		Status:        "PENDING",
 	}
@@ -59,10 +59,11 @@ func main() {
 	fmt.Println("=== Sending to Settlement ===")
 
 	// Send to settlement system
-	err = iso20022Service.SendToSettlement(pacs008)
+	v, err := iso20022Service.SendToSettlement(pacs008)
 	if err != nil {
 		log.Fatalf("Failed to send to settlement: %v", err)
 	}
 
+	fmt.Printf("Settlement response: %v\n", v)
 	fmt.Println("Transaction successfully processed and sent to settlement!")
 }

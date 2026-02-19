@@ -20,14 +20,14 @@ type OnboardMerchantRequest struct {
 	BusinessType    string  `json:"businessType" validate:"required"`
 	TaxID           string  `json:"taxId" validate:"required"`
 	CommissionRate  float64 `json:"commissionRate" validate:"gte=0,lte=100"`
-	SettlementCycle string  `json:"settlementCycle" validate:"required,oneof=daily weekly monthly"`
+	SettlementCycle string  `json:"settlementCycle" validate:"required,oneof=DAILY WEEKLY MONTHLY"`
 }
 
 type UpdateMerchantRequest struct {
 	BusinessName    string  `json:"businessName,omitempty"`
 	BusinessType    string  `json:"businessType,omitempty"`
 	CommissionRate  float64 `json:"commissionRate,omitempty" validate:"omitempty,gte=0,lte=100"`
-	SettlementCycle string  `json:"settlementCycle,omitempty" validate:"omitempty,oneof=daily weekly monthly"`
+	SettlementCycle string  `json:"settlementCycle,omitempty" validate:"omitempty,oneof=DAILY WEEKLY MONTHLY"`
 }
 
 func NewMerchantService(db *sql.DB) *MerchantService {
@@ -60,12 +60,12 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 
 	var req OnboardMerchantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		SendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		SendErrorResponse(w, "Validation Failed", http.StatusBadRequest, err)
 		return
 	}
 
@@ -81,7 +81,7 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 		&merchant.CreatedAt, &merchant.UpdatedAt)
 
 	if err == sql.ErrNoRows {
-		SendErrorResponse(w, "Merchant Already Exists for this user", http.StatusConflict, nil)
+		SendErrorResponse(w, "Merchant Already Exists for this User", http.StatusConflict, nil)
 		return
 	}
 	if err != nil {
@@ -90,14 +90,14 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	log.Printf("[MERCHANT] Merchant created successfully - ID: %d, User: %v", merchant.ID, userID)
+	log.Printf("[MERCHANT] Merchant Created Successfully - ID: %d, User: %v", merchant.ID, userID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(merchant)
 }
 
 // GetMerchant godoc
 // @Summary Get merchant details
-// @Description Retrieve merchant information for the authenticated user
+// @Description Retrieve merchant Data for the authenticated user
 // @Tags Merchants
 // @Produce json
 // @Success 200 {object} models.Merchant
@@ -106,7 +106,7 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
 // @Router /merchants [get]
-func (s *MerchantService) GetMerchant(w http.ResponseWriter, r *http.Request) {
+func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID")
 	if userID == nil {
 		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
@@ -190,7 +190,7 @@ func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.GetMerchant(w, r)
+	// s.GetMerchant(w, r)
 }
 
 // UpdateMerchantStatus godoc

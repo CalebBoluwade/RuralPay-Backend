@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-redis/redis/v8"
+	"github.com/ruralpay/backend/internal/models"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
@@ -32,7 +33,7 @@ func TestAuthService_Register(t *testing.T) {
 	service := NewAuthService(db, redisClient)
 
 	t.Run("successful registration", func(t *testing.T) {
-		req := RegisterRequest{
+		req := models.RegisterRequest{
 			Email:     "test@example.com",
 			Password:  "password123",
 			FirstName: "John",
@@ -50,7 +51,7 @@ func TestAuthService_Register(t *testing.T) {
 		service.Register(w, r)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var response AuthResponse
+		var response models.AuthResponse
 		json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NotEmpty(t, response.Token)
 		assert.Equal(t, req.Email, response.User.Email)
@@ -85,7 +86,7 @@ func TestAuthService_Login(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"id", "email", "first_name", "last_name", "password"}).
 				AddRow(1, "test@example.com", "John", "Doe", hashedPassword))
 
-		req := LoginRequest{
+		req := models.LoginRequest{
 			Identifier: "4359502429542",
 			Password:   "password123",
 		}
@@ -97,7 +98,7 @@ func TestAuthService_Login(t *testing.T) {
 		service.Login(w, r)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var response AuthResponse
+		var response models.AuthResponse
 		json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NotEmpty(t, response.Token)
 	})
@@ -107,7 +108,7 @@ func TestAuthService_Login(t *testing.T) {
 			WithArgs("34324920424942").
 			WillReturnError(sql.ErrNoRows)
 
-		req := LoginRequest{
+		req := models.LoginRequest{
 			Identifier: "34324920424942",
 			Password:   "password123",
 		}
@@ -145,7 +146,7 @@ func TestGenerateJWT(t *testing.T) {
 
 	merchantID := 1
 	merchantStatus := "active"
-	token, err := generateJWT(123, &merchantID, &merchantStatus)
+	token, err := generateJWT(123, models.Merchant{ID: merchantID, Status: merchantStatus})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/moov-io/iso8583/prefix"
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type ISO8583Service struct {
@@ -83,7 +84,7 @@ func (s *ISO8583Service) BuildISO8583Message(cardReq *models.CardPaymentRequest)
 	log.Printf("[CardProvider] Set MTI: 0200")
 
 	msg.Field(2, s.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN))
-	log.Printf("[CardProvider] Set Field 2 (PAN): %s", maskPAN(s.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)))
+	log.Printf("[CardProvider] Set Field 2 (PAN): %s", utils.MaskPAN(s.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)))
 
 	msg.Field(3, "000000")
 	log.Printf("[CardProvider] Set Field 3 (Processing Code): 000000")
@@ -148,7 +149,7 @@ func (s *ISO8583Service) processAuthorization(ctx context.Context, msg *iso8583.
 	amount, _ := msg.GetString(4)
 	stan, _ := msg.GetString(11)
 
-	log.Printf("[ISO8583] Auth: PAN=%s, Amount=%s, STAN=%s", maskPAN(pan), amount, stan)
+	log.Printf("[ISO8583] Auth: PAN=%s, Amount=%s, STAN=%s", utils.MaskPAN(pan), amount, stan)
 
 	var balance int64
 	var status string
@@ -173,7 +174,7 @@ func (s *ISO8583Service) processFinancial(ctx context.Context, msg *iso8583.Mess
 	amount, _ := msg.GetString(4)
 	stan, _ := msg.GetString(11)
 
-	log.Printf("[ISO8583] Financial: PAN=%s, Amount=%s, STAN=%s", maskPAN(pan), amount, stan)
+	log.Printf("[ISO8583] Financial: PAN=%s, Amount=%s, STAN=%s", utils.MaskPAN(pan), amount, stan)
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -203,7 +204,7 @@ func (s *ISO8583Service) processReversal(ctx context.Context, msg *iso8583.Messa
 	pan, _ := msg.GetString(2)
 	origStan, _ := msg.GetString(90)
 
-	log.Printf("[ISO8583] Reversal: PAN=%s, OrigSTAN=%s", maskPAN(pan), origStan)
+	log.Printf("[ISO8583] Reversal: PAN=%s, OrigSTAN=%s", utils.MaskPAN(pan), origStan)
 
 	return s.BuildFinancialResponse(msg, "00")
 }
@@ -330,11 +331,4 @@ func generateAuthCode() string {
 	b := make([]byte, 3)
 	rand.Read(b)
 	return fmt.Sprintf("%06d", int(b[0])<<16|int(b[1])<<8|int(b[2]))[:6]
-}
-
-func maskPAN(pan string) string {
-	if len(pan) < 10 {
-		return "****"
-	}
-	return pan[:6] + "****" + pan[len(pan)-4:]
 }

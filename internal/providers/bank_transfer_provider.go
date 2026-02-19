@@ -44,11 +44,11 @@ func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *
 	log.Printf("[BankTransferProvider] Validating Payment: [From]=%s, [To]=%s, [Amount]=%d, [Type]=%s", req.FromAccount, req.ToAccount, req.Amount, req.TxType)
 
 	if req.FromAccount == "" {
-		log.Printf("[BankTransferProvider] Validation Failed: source account is empty")
+		log.Printf("[BankTransferProvider] Validation Failed: Source Account is Empty")
 		return errors.New("source account is required")
 	}
 	if req.ToAccount == "" {
-		log.Printf("[BankTransferProvider] Validation Failed: destination account is empty")
+		log.Printf("[BankTransferProvider] Validation Failed: Destination Account is empty")
 		return errors.New("destination account is required")
 	}
 	if req.FromAccount == req.ToAccount {
@@ -69,31 +69,31 @@ func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *
 			log.Printf("[BankTransferProvider] Validation failed: source account not found: %s", req.FromAccount)
 			return errors.New("source account not found")
 		}
-		log.Printf("[BankTransferProvider] Database error during validation: %v", err)
+		log.Printf("[BankTransferProvider] Database Error During Validation: %v", err)
 		return errors.New("validation failed")
 	}
 
-	log.Printf("[BankTransferProvider] Account status: %s, balance: %d", status, balance)
+	log.Printf("[BankTransferProvider] [Account Status]: %s, [Balance]: %d", status, balance)
 	if status != "ACTIVE" {
-		log.Printf("[BankTransferProvider] Validation failed: account not active, status=%s", status)
-		return errors.New("source account not active")
+		log.Printf("[BankTransferProvider] Validation Failed: Account Not Active, [Status]=%s", status)
+		return errors.New("Source Account Not Active")
 	}
 
 	fee := p.calculateFee(req.Amount)
 	totalAmount := req.Amount + fee
-	log.Printf("[BankTransferProvider] Fee Calculation: [Amount]=%d, [Fee]=%d, [Total]=%d, [Balance]=%d", req.Amount, fee, totalAmount, balance)
+	log.Printf("[BankTransferProvider] Fee Calculation: [Transaction ID]=%s, [Amount]=%d, [Fee]=%d, [Total]=%d, [Balance]=%d", req.TransactionID, req.Amount, fee, totalAmount, balance)
 
 	if balance < totalAmount {
 		log.Printf("[BankTransferProvider] Validation failed: Insufficient Balance, required=%d, available=%d", totalAmount, balance)
 		return errors.New("Insufficient Balance")
 	}
 
-	log.Printf("[BankTransferProvider] Validation Passed")
+	log.Printf("[BankTransferProvider] Validation Passed --> [Transaction ID]=%s", req.TransactionID)
 	return nil
 }
 
 func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
-	log.Printf("[BankTransferProvider] Starting Payment Processing: txID=%s", req.TransactionID)
+	log.Printf("[BankTransferProvider] Starting Payment Processing --> [Transaction ID]=%s", req.TransactionID)
 
 	if err := p.ValidatePayment(ctx, req); err != nil {
 		log.Printf("[BankTransferProvider] Payment Validation Failed: %v", err)
@@ -107,10 +107,10 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		}, err
 	}
 
-	log.Printf("[BankTransferProvider] Beginning Database Transaction")
+	log.Printf("[BankTransferProvider] Beginning Database Transaction --> [Transaction ID]=%s", req.TransactionID)
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("[BankTransferProvider] Failed to begin transaction: %v", err)
+		log.Printf("[BankTransferProvider] Failed to Begin Transaction  --> [Transaction ID]=%s %v", req.TransactionID, err)
 		return nil, err
 	}
 	defer tx.Rollback()
@@ -132,11 +132,11 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	}
 	signature, err := p.HSM.SignTransaction(hsmTx)
 	if err != nil {
-		log.Printf("[BankTransferProvider] Failed to sign transaction: %v", err)
+		log.Printf("[BankTransferProvider] Failed to Sign Transaction  --> [Transaction ID]=%s [ERROR]==>%v", req.TransactionID, err)
 		return nil, errors.New("security signing failed")
 	}
 
-	log.Printf("[BankTransferProvider] Processing Transfer with Ledger Service")
+	log.Printf("[BankTransferProvider] Processing Transfer with Ledger Service --> [Transaction ID]=%s", req.TransactionID)
 	if err := p.ledgerService.TransferTx(tx, req.FromAccount, req.ToAccount, req.TransactionID, totalAmount); err != nil {
 		log.Printf("[BankTransferProvider] Ledger Transfer Failed: %v", err)
 		return &models.PaymentResponse{
@@ -149,7 +149,7 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		}, err
 	}
 
-	log.Printf("[BankTransferProvider] Updating daily spent and inserting transaction")
+	log.Printf("[BankTransferProvider] Updating Daily Spent and Inserting Transaction --> [Transaction ID]=%s", req.TransactionID)
 	// Update metadata with signing info
 	if req.Metadata == nil {
 		req.Metadata = make(map[string]any)
@@ -180,25 +180,25 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	`, totalAmount, req.FromAccount, req.TransactionID, req.ToAccount, req.Amount, fee, req.Currency, req.Narration, req.TxType, locationJSON, metadata, signature)
 
 	if err != nil {
-		log.Printf("[BankTransferProvider] Failed to update daily spent or insert transaction: %v", err)
+		log.Printf("[BankTransferProvider] Failed to Update Daily Spent or Insert Transaction --> [Transaction ID]=%s %v", req.TransactionID, err)
 		return nil, err
 	}
 
-	log.Printf("[BankTransferProvider] Committing Transaction")
+	log.Printf("[BankTransferProvider] Committing Transaction --> [Transaction ID]=%s", req.TransactionID)
 	if err := tx.Commit(); err != nil {
-		log.Printf("[BankTransferProvider] Failed to commit transaction: %v", err)
+		log.Printf("[BankTransferProvider] Failed to Commit Transaction --> [Transaction ID]=%s %v", req.TransactionID, err)
 		return nil, err
 	}
 
-	log.Printf("[BankTransferProvider] Successfully committed transaction, Sending To Settlement")
+	log.Printf("[BankTransferProvider] Successfully Committed Transaction, Sending To Settlement --> [Transaction ID]=%s", req.TransactionID)
 	err = p.sendToSettlement(req)
 	if err != nil {
-		log.Printf("[BankTransferProvider] Settlement failed: %v", err)
+		log.Printf("[BankTransferProvider] Settlement Failed. --> [Transaction ID]=%s %v", req.TransactionID, err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       fmt.Sprintf("Settlement failed: %v", err),
+			Message:       fmt.Sprintf("Settlement Failed: %v", err),
 			PaymentMode:   models.PaymentModeBankTransfer,
 			Timestamp:     time.Now(),
 		}, nil
@@ -223,11 +223,11 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 	log.Printf("[BankTransferProvider] Preparing settlement for transaction: %s", req.TransactionID)
 	modelTx := &models.Transaction{
 		TransactionID: req.TransactionID,
-		ReferenceID:   req.TransactionID,
+		// Reference:     req.TransactionID,
 		FromAccountID: req.FromAccount,
 		ToAccountID:   req.ToAccount,
 		Type:          string(req.TxType),
-		Amount:        float64(req.Amount) / 100,
+		Amount:        req.Amount / 100,
 		Currency:      req.Currency,
 		Status:        "PENDING",
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/services"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type CardPaymentProvider struct {
@@ -38,11 +39,12 @@ func (p *CardPaymentProvider) GetPaymentMode() models.PaymentMode {
 }
 
 func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
-	log.Printf("[CardProvider] Validating payment: card=%s, amount=%d", req.FromAccount, req.Amount)
+	log.Printf("[CardProvider] Validating Card Payment --> [Amount]=%d", req.Amount)
 
 	if req.FromAccount == "" {
-		log.Printf("[CardProvider] Validation failed: card ID is empty")
-		return errors.New("card ID is required")
+		log.Printf("[CardProvider] Validation Failed: Card ID is Empty")
+
+		return errors.New("Card ID is required")
 	}
 	if req.Amount <= 0 {
 		log.Printf("[CardProvider] Validation failed: invalid amount=%d", req.Amount)
@@ -55,14 +57,14 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[CardProvider] Validation failed: card not found: %s", req.FromAccount)
+			log.Printf("[CardProvider] Validation Failed: card not found: %s", req.FromAccount)
 			return errors.New("card not found")
 		}
 		log.Printf("[CardProvider] Database error during validation: %v", err)
 		return errors.New("validation failed")
 	}
 
-	log.Printf("[CardProvider] Card status: %s, balance: %d", status, balance)
+	log.Printf("[CardProvider] Card Status: %s, balance: %d", status, balance)
 	if status != "ACTIVE" {
 		log.Printf("[CardProvider] Validation failed: card not active, status=%s", status)
 		return errors.New("card not active")
@@ -95,7 +97,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}
 
 	log.Printf("[CardProvider] Building ISO 8583 message: [PAN]=%s, [Amount]=%d, [TxType]=%s",
-		maskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)), cardReq.Amount, cardReq.TxType)
+		utils.MaskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)), cardReq.Amount, cardReq.TxType)
 
 	isoMsg, err := p.iso8583Service.BuildISO8583Message(cardReq)
 	if err != nil {
@@ -104,7 +106,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       "Failed to build payment message",
+			Message:       "Failed to Build Payment Message",
 			PaymentMode:   models.PaymentModeCard,
 			Timestamp:     time.Now(),
 		}, err
@@ -119,7 +121,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       "Payment processing failed",
+			Message:       "Payment Processing Failed",
 			PaymentMode:   models.PaymentModeCard,
 			Timestamp:     time.Now(),
 		}, err
@@ -130,7 +132,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to begin transaction: %v", err)
+		log.Printf("[CardProvider] Failed to Begin Transaction: %v", err)
 		return nil, err
 	}
 	defer tx.Rollback()
@@ -154,7 +156,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}
 
 	log.Printf("[CardProvider] Inserting Transaction and updating daily spent: [txID]=%s, [Card]=%s, [Amount]=%d",
-		req.TransactionID, maskPAN(req.FromAccount), req.Amount)
+		req.TransactionID, utils.MaskPAN(req.FromAccount), req.Amount)
 
 	// Update metadata with signing info
 	if req.Metadata == nil {
@@ -222,17 +224,10 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}, nil
 }
 
-func maskPAN(pan string) string {
-	if len(pan) < 10 {
-		return "****"
-	}
-	return pan[:6] + "****" + pan[len(pan)-4:]
-}
-
 func (p *CardPaymentProvider) DecryptPIICredentials(encryptedText string) string {
 	plaintext, err := p.HSM.DecryptPII(encryptedText)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to decrypt PII: %v", err)
+		log.Printf("[CardProvider] Failed to Decrypt PII: %v", err)
 		return ""
 	}
 	return plaintext
@@ -253,13 +248,13 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&cardReq); err != nil {
-		log.Printf("[CardProvider] Error decoding request: %v", err)
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		log.Printf("[CardProvider] Error Decoding Payment Request: %v", err)
+		services.SendErrorResponse(w, "Invalid Request Body", http.StatusBadRequest, nil)
 		return
 	}
 
-	log.Printf("[CardProvider] Decoded card payment request: txID=%s, amount=%d, txType=%s, PAN=%s",
-		cardReq.TransactionID, cardReq.Amount, cardReq.TxType, maskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)))
+	log.Printf("[CardProvider] Card Payment Request: [TransactionID]=%s, [Amount]=%d, [Type]=%s, [PAN]=%s",
+		cardReq.TransactionID, cardReq.Amount, cardReq.TxType, utils.MaskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)))
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		log.Printf("[CardProvider] Multiple JSON objects detected")

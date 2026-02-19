@@ -17,6 +17,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ruralpay/backend/internal/models"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/argon2"
 )
@@ -25,45 +26,6 @@ type AuthService struct {
 	db        *sql.DB
 	redis     *redis.Client
 	validator *validator.Validate
-}
-
-// LoginRequest represents the login request payload
-// @Description Login request structure
-type LoginRequest struct {
-	Identifier string `json:"identifier" validate:"required" example:"+2348012345678"` // User phone number, email, or username
-	Password   string `json:"password" validate:"required,min=6" example:"password123"`  // User password
-}
-
-// RegisterRequest represents the registration request payload
-// @Description Registration request structure
-type RegisterRequest struct {
-	Email       string `json:"Email" validate:"required,email" example:"user@example.com"` // User email address
-	Username    string `json:"Username" validate:"required,min=3" example:"johndoe"`       // Username
-	Password    string `json:"Password" validate:"required,min=6" example:"password123"`   // User password
-	FirstName   string `json:"FirstName" validate:"required,min=2" example:"John"`         // User first name
-	LastName    string `json:"LastName" validate:"required,min=2" example:"Doe"`           // User last name
-	BVN         string `json:"BVN" validate:"required,len=11" example:"12345678901"`       // Bank Verification Number
-	PhoneNumber string `json:"PhoneNumber" validate:"required" example:"+2348012345678"`   // Phone number
-}
-
-// AuthResponse represents the authentication response
-// @Description Authentication response structure
-type AuthResponse struct {
-	Token string `json:"token" example:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."` // JWT token
-	User  User   `json:"user"`                                                    // User information
-}
-
-// User represents user information
-// @Description User structure
-type User struct {
-	ID          int    `json:"id" example:"1"`                       // User ID
-	Email       string `json:"email" example:"user@example.com"`     // User email
-	FirstName   string `json:"FirstName" example:"John"`             // User first name
-	LastName    string `json:"LastName" example:"Doe"`               // User last name
-	AccountId   string `json:"AccountId" example:"1234567890"`       // User account ID`
-	PhoneNumber string `json:"PhoneNumber" example:"+2348012345678"` // User phone number
-	BVN         string `json:"BVN" example:"12345678901"`            // User BVN
-	DeviceID    string `json:"device_id"`
 }
 
 func NewAuthService(db *sql.DB, redisClient *redis.Client) *AuthService {
@@ -88,7 +50,7 @@ func (s *AuthService) sendErrorResponse(w http.ResponseWriter, message string, s
 // @Success 200 {object} AuthResponse "Registration successful"
 // @Failure 400 {string} string "Invalid request"
 // @Failure 409 {string} string "Email already exists"
-// @Failure 500 {string} string "Internal server error"
+// @Failure 500 {string} string "Internal Service error"
 // @Router /auth/register [post]
 func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[AUTH] Registration attempt from IP: %s", r.RemoteAddr)
@@ -99,10 +61,10 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
-	var req RegisterRequest
+	var req models.RegisterRequest
 	if err := dec.Decode(&req); err != nil {
 		log.Printf("[AUTH] Registration failed - invalid request: %v", err)
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		s.sendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -114,7 +76,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.validator.Struct(&req); err != nil {
 		log.Printf("[AUTH] Registration validation failed: %v", err)
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		s.sendErrorResponse(w, "Validation Failed", http.StatusBadRequest, err)
 		return
 	}
 
@@ -129,7 +91,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	// Generate 10-digit account ID
 	accountID := generateAccountID()
-	accountName := fmt.Sprintf("%s %s", req.FirstName, req.LastName)
+	// accountName := fmt.Sprintf("%s %s", req.FirstName, req.LastName)
 
 	// Start transaction
 	tx, err := s.db.Begin()
@@ -140,18 +102,13 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	// Insert user, account, and limits in a single CTE query
+	// Insert user, and limits in a single CTE query
 	var userID int
 	err = tx.QueryRow(`
 		WITH new_user AS (
-			INSERT INTO users (email, username, password, first_name, last_name, account_id, bvn, phone_number)
+			INSERT INTO users (email, username, password, first_name, last_name, account_id, bvn, phone_number, push_token)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			RETURNING id
-		),
-		new_account AS (
-			INSERT INTO accounts (account_name, account_id, balance, version, user_id, updated_at)
-			SELECT $9, $6, 0, 1, id, NOW() FROM new_user
-			RETURNING user_id
 		),
 		new_limits AS (
 			INSERT INTO user_limits (user_id, daily_limit, single_transaction_limit, updated_at)
@@ -159,7 +116,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 			RETURNING user_id
 		)
 		SELECT id FROM new_user
-	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, accountName, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
+	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, req.ExpoPushToken, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
 	if err != nil {
 		log.Printf("[AUTH] User creation failed for %s: %v", req.Email, err)
 		s.sendErrorResponse(w, "Email or Username Already Exists", http.StatusConflict, nil)
@@ -175,16 +132,16 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[AUTH] User created successfully - ID: %d, Email: %s", userID, req.Email)
 
-	token, err := generateJWT(userID, nil, nil)
+	token, err := generateJWT(userID, models.Merchant{})
 	if err != nil {
 		log.Printf("[AUTH] JWT generation failed for user %d: %v", userID, err)
 		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
 		return
 	}
 
-	response := AuthResponse{
+	response := models.AuthResponse{
 		Token: token,
-		User:  User{ID: userID, Email: req.Email, FirstName: req.FirstName, LastName: req.LastName, AccountId: accountID},
+		User:  models.User{ID: userID, Email: req.Email, FirstName: req.FirstName, LastName: req.LastName, PhoneNumber: req.PhoneNumber, AccountId: accountID},
 	}
 
 	log.Printf("[AUTH] Registration successful for user %d", userID)
@@ -201,22 +158,20 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 // @Param request body LoginRequest true "Login request"
 // @Success 200 {object} AuthResponse "Login successful"
 // @Failure 400 {string} string "Invalid request"
-// @Failure 401 {string} string "Invalid credentials"
+// @Failure 401 {string} string "Invalid Credentials"
 // @Failure 500 {string} string "Internal server error"
 // @Router /auth/login [post]
 func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[AUTH] Login attempt from IP: %s", r.RemoteAddr)
-
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
-	var req LoginRequest
+	var req models.LoginRequest
 	if err := dec.Decode(&req); err != nil {
 		log.Printf("[AUTH] Login failed - invalid request: %v", err)
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		s.sendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -227,52 +182,100 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		log.Printf("[AUTH] Login validation failed: %v", err)
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		log.Printf("[AUTH] Login Validation Failed --> Received Raw Request Body: %v, Error: %v", &req, err)
+		s.sendErrorResponse(w, "Login Validation Failed", http.StatusBadRequest, err)
 		return
 	}
 
 	log.Printf("[AUTH] Login request for identifier: %s", req.Identifier)
 
-	var user User
+	var user models.User
 	var hashedPassword string
-	err := s.db.QueryRow(`SELECT id, email, first_name, last_name, password, account_id 
-		FROM users 
-		WHERE phone_number = $1 OR LOWER(email) = LOWER($1) OR username = $1`,
-		req.Identifier).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &hashedPassword, &user.AccountId)
+
+	// Variables to hold nullable merchant data
+	var (
+		mID              sql.NullInt64
+		mBusinessName    sql.NullString
+		mBusinessType    sql.NullString
+		mTaxID           sql.NullString
+		mStatus          sql.NullString
+		mCommissionRate  sql.NullFloat64
+		mSettlementCycle sql.NullString
+		mCreatedAt       sql.NullTime
+		mUpdatedAt       sql.NullTime
+	)
+
+	query := `
+		SELECT 
+			u.id, u.email, u.first_name, u.last_name, u.phone_number, u.username, password, u.account_id,
+			m.id, m.business_name, m.business_type, m.tax_id, m.status, 
+			m.commission_rate, m.settlement_cycle, m.created_at, m.updated_at
+		FROM users u
+		LEFT JOIN merchants m ON u.id = m.user_id
+		WHERE u.phone_number = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(u.username) = LOWER($1)`
+
+	err := s.db.QueryRow(query, req.Identifier).Scan(
+		&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.Username, &hashedPassword, &user.AccountId,
+		&mID, &mBusinessName, &mBusinessType, &mTaxID, &mStatus,
+		&mCommissionRate, &mSettlementCycle, &mCreatedAt, &mUpdatedAt,
+	)
+
 	if err != nil {
-		log.Printf("[AUTH] User not found for identifier: %s", req.Identifier)
-		s.sendErrorResponse(w, "Invalid credentials", http.StatusUnauthorized, nil)
+		if err == sql.ErrNoRows {
+			log.Printf("[AUTH] User not found for identifier: %s", req.Identifier)
+			s.sendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+		} else {
+			log.Printf("[AUTH] Database error during login: %v", err)
+			s.sendErrorResponse(w, "Internal server error", http.StatusInternalServerError, nil)
+		}
 		return
 	}
 
 	if !verifyPassword(req.Password, hashedPassword) {
-		log.Printf("[AUTH] Invalid password for identifier: %s", req.Identifier)
-		s.sendErrorResponse(w, "Invalid credentials", http.StatusUnauthorized, nil)
+		log.Printf("[AUTH] Invalid Password for identifier: %s", req.Identifier)
+		s.sendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
 		return
 	}
 
 	log.Printf("[AUTH] Password verified for user ID: %d", user.ID)
 
-	var merchantID *int
-	var merchantStatus *string
-	var mID int
-	var mStatus string
-	err = s.db.QueryRow("SELECT id, status FROM merchants WHERE user_id = $1", user.ID).Scan(&mID, &mStatus)
-	if err == nil {
-		merchantID = &mID
-		merchantStatus = &mStatus
-		log.Printf("[AUTH] Merchant found for user %d - Merchant ID: %d, Status: %s", user.ID, mID, mStatus)
+	user.Role = "consumer"
+
+	if mID.Valid {
+		merchant := models.Merchant{
+			ID:              int(mID.Int64),
+			UserID:          user.ID,
+			BusinessName:    mBusinessName.String,
+			BusinessType:    mBusinessType.String,
+			TaxID:           mTaxID.String,
+			Status:          mStatus.String,
+			CommissionRate:  mCommissionRate.Float64,
+			SettlementCycle: mSettlementCycle.String,
+			CreatedAt:       mCreatedAt.Time,
+			UpdatedAt:       mUpdatedAt.Time,
+		}
+
+		user.Role = "merchant"
+		user.Merchant = &merchant
+
+		id := int(mID.Int64)
+		status := mStatus.String
+
+		log.Printf("[AUTH] Merchant Found for User %d - Merchant ID: %d, Status: %s", user.ID, id, status)
 	}
 
-	token, err := generateJWT(user.ID, merchantID, merchantStatus)
+	var merchant models.Merchant
+	if user.Merchant != nil {
+		merchant = *user.Merchant
+	}
+	token, err := generateJWT(user.ID, merchant)
 	if err != nil {
 		log.Printf("[AUTH] JWT generation failed for user %d: %v", user.ID, err)
 		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
 		return
 	}
 
-	response := AuthResponse{
+	response := models.AuthResponse{
 		Token: token,
 		User:  user,
 	}
@@ -385,7 +388,7 @@ func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[AUTH] Fetching account details for user ID: %v", userID)
-	var user User
+	var user models.User
 	err := s.db.QueryRow("SELECT users.id, email, first_name, last_name, phone_number, users.account_id FROM users LEFT JOIN accounts ON users.id = accounts.user_id WHERE users.id = $1",
 		userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.AccountId)
 	if err != nil {
@@ -404,17 +407,21 @@ func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(user)
 }
 
-func generateJWT(userID int, merchantID *int, merchantStatus *string) (string, error) {
+func generateJWT(userID int, merchant models.Merchant) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"nameid":  userID,
 		"exp":     time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_hours")) * time.Hour).Unix(),
+		"iss":     viper.GetString("jwt.issuer"),
+		"aud":     viper.GetString("jwt.audience"),
 	}
-	if merchantID != nil {
-		claims["merchant_id"] = *merchantID
+
+	if merchant.ID != 0 {
+		claims["merchant_id"] = merchant.ID
 	}
-	if merchantStatus != nil {
-		claims["merchant_status"] = *merchantStatus
+
+	if merchant.Status != "" {
+		claims["merchant_status"] = merchant.Status
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(viper.GetString("jwt.secret_key")))
@@ -587,7 +594,7 @@ func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	hashedPassword, err := hashPassword(req.Password)
 	if err != nil {
 		log.Printf("[AUTH] Password hashing failed: %v", err)
-		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		s.sendErrorResponse(w, "Failed to Reset Password", http.StatusInternalServerError, nil)
 		return
 	}
 
@@ -623,4 +630,17 @@ func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"message": "Password reset successful"})
+}
+
+func (s *AuthService) CheckUserStatus(userID string) (bool, error) {
+	var status string
+	err := s.db.QueryRow("SELECT status FROM users WHERE id = $1", userID).Scan(&status)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return status == "active", nil
 }

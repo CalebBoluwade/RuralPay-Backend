@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -25,24 +26,26 @@ type PaymentProvider interface {
 }
 
 type BasePaymentProvider struct {
-	DB        *sql.DB
-	Redis     *redis.Client
-	HSM       hsm.HSMInterface
-	Audit     *hsm.AuditLogger
-	Validator *services.ValidationHelper
+	DB              *sql.DB
+	Redis           *redis.Client
+	HSM             hsm.HSMInterface
+	Audit           *hsm.AuditLogger
+	Validator       *services.ValidationHelper
+	notificationSVC *services.NotificationService
 }
 
 func NewBasePaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSMInterface) *BasePaymentProvider {
 	return &BasePaymentProvider{
-		DB:        db,
-		Redis:     redis,
-		HSM:       hsmInstance,
-		Audit:     hsm.NewAuditLogger(),
-		Validator: services.NewValidationHelper(),
+		DB:              db,
+		Redis:           redis,
+		HSM:             hsmInstance,
+		Audit:           hsm.NewAuditLogger(),
+		Validator:       services.NewValidationHelper(),
+		notificationSVC: services.NewNotificationService(),
 	}
 }
 
-func (b *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *http.Request, provider PaymentProvider) {
+func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *http.Request, provider PaymentProvider) {
 	log.Printf("[BasePaymentProvider] Starting Payment Request Handling for Mode: %s", provider.GetPaymentMode())
 
 	userID, ok := r.Context().Value("userID").(string)
@@ -51,7 +54,7 @@ func (b *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *htt
 		services.SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
 		return
 	}
-	log.Printf("[BasePaymentProvider] UserID from context: %s", userID)
+	log.Printf("[BasePaymentProvider] Context User ID: %s", userID)
 
 	var req models.PaymentRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
@@ -60,7 +63,7 @@ func (b *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *htt
 	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(&req); err != nil {
-		log.Printf("[BasePaymentProvider] Error decoding request: %v", err)
+		log.Printf("[BasePaymentProvider] Error Decoding Payment Request: %v", err)
 		services.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
@@ -80,41 +83,53 @@ func (b *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *htt
 		log.Printf("[BasePaymentProvider] Generated transaction ID: %s", req.TransactionID)
 	}
 
-	log.Printf("[BasePaymentProvider] Verifying account ownership: account=%s, userID=%s", req.FromAccount, userID)
-	if err := b.verifyAccountOwnership(req.FromAccount, userID); err != nil {
+	log.Printf("[BasePaymentProvider] Verifying Account ownership: [Account]=%s, [User ID]=%s", req.FromAccount, userID)
+	if err := base.verifyAccountOwnership(req.FromAccount, userID); err != nil {
 		log.Printf("[BasePaymentProvider] Account ownership verification failed: %v", err)
 		services.SendErrorResponse(w, "Unauthorized: Account does not belong to user", http.StatusForbidden, nil)
 		return
 	}
 	log.Printf("[BasePaymentProvider] Account ownership verified successfully")
 
-	if cachedStatus, found := b.checkIdempotency(req.TransactionID); found {
+	if cachedStatus, found := base.checkIdempotency(req.TransactionID); found {
 		log.Printf("[PAYMENT] Idempotent request: %s, status: %s", req.TransactionID, cachedStatus)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"success":       cachedStatus == "COMPLETED" || cachedStatus == "PENDING",
 			"transactionId": req.TransactionID,
 			"status":        cachedStatus,
-			"message":       "Payment already processed",
+			"message":       "Payment Already Processed",
 			"paymentMode":   req.PaymentMode,
 		})
 		return
 	}
 
-	log.Printf("[PAYMENT] Processing %s Payment: txID=%s, from=%s, to=%s, amount=%d",
+	log.Printf("[PAYMENT] Processing %s Payment: [TransactionID]=%s, [SENDER]=%s, [RECEIVER]=%s, [AMOUNT]=%d",
 		req.PaymentMode, req.TransactionID, req.FromAccount, req.ToAccount, req.Amount)
 
 	response, err := provider.ProcessPayment(r.Context(), &req)
 	if err != nil {
 		log.Printf("[PAYMENT] Payment Failed: %v", err)
-		b.Audit.LogError(req.TransactionID, req.FromAccount, err)
+		base.Audit.LogError(req.TransactionID, req.FromAccount, err)
 		services.SendErrorResponse(w, "Payment Processing Failed: "+err.Error(), http.StatusBadRequest, nil)
 		return
 	}
 
-	log.Printf("[BasePaymentProvider] Payment Processed: [Success]=%v, [Status]=%s, [Message]=%s", response.Success, response.Status, response.Message)
-	b.setIdempotency(req.TransactionID, response.Status)
-	b.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.ToAccount, req.Amount, response.Status)
+	log.Printf("[BasePaymentProvider] Payment Processed. [Success]=%v, [Status]=%s, [Message]=%s", response.Success, response.Status, response.Message)
+	base.setIdempotency(req.TransactionID, response.Status)
+	base.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.ToAccount, req.Amount, response.Status)
+
+	id, _ := strconv.Atoi(userID)
+
+	go base.notificationSVC.SendPaymentNotification(&models.Transaction{
+		TransactionID: req.TransactionID,
+		FromAccountID: req.FromAccount,
+		ToAccountID:   req.ToAccount,
+		Amount:        req.Amount,
+		Status:        response.Status,
+	}, &models.User{
+		ID: id,
+	}, models.PaymentSent)
 
 	w.Header().Set("Content-Type", "application/json")
 	if response.Success {
@@ -136,17 +151,17 @@ func (b *BasePaymentProvider) checkIdempotency(txID string) (string, bool) {
 	return "", false
 }
 
-func (b *BasePaymentProvider) setIdempotency(txID, status string) {
+func (base *BasePaymentProvider) setIdempotency(txID, status string) {
 	ctx := context.Background()
 	key := fmt.Sprintf("idempotency:%s", txID)
-	b.Redis.SetEX(ctx, key, status, 24*time.Hour)
+	base.Redis.SetEX(ctx, key, status, 24*time.Hour)
 }
 
-func (b *BasePaymentProvider) verifyAccountOwnership(accountIdentifier, userID string) error {
+func (base *BasePaymentProvider) verifyAccountOwnership(accountIdentifier, userID string) error {
 	log.Printf("[BasePaymentProvider] Verifying ownership: account=%s, userID=%s", accountIdentifier, userID)
 
 	var ownerID int
-	err := b.DB.QueryRow(`
+	err := base.DB.QueryRow(`
 		SELECT user_id 
 		FROM accounts
 		WHERE (account_id = $1 OR card_id = $1) AND user_id IS NOT NULL
@@ -155,7 +170,7 @@ func (b *BasePaymentProvider) verifyAccountOwnership(accountIdentifier, userID s
 
 	if err == sql.ErrNoRows {
 		log.Printf("[BasePaymentProvider] Account not found in accounts table, checking cards table")
-		err = b.DB.QueryRow(`
+		err = base.DB.QueryRow(`
 			SELECT c.user_id 
 			FROM accounts a
 			JOIN cards c ON a.card_id = c.card_id

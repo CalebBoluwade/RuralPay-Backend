@@ -25,8 +25,7 @@ const (
 type Metadata map[string]any
 
 type PaymentRequest struct {
-	TransactionID string      `json:"transactionId"`
-	Reference     string      `json:"reference,omitempty"`
+	TransactionID string      `json:"transactionId" validate:"required"`
 	UserID        string      `json:"userId"`
 	FromAccount   string      `json:"fromAccount"`
 	ToAccount     string      `json:"toAccount"`
@@ -43,6 +42,7 @@ type PaymentRequest struct {
 type PaymentResponse struct {
 	Success       bool        `json:"success"`
 	TransactionID string      `json:"transactionId"`
+	Reference     string      `json:"reference"`
 	Status        string      `json:"status"`
 	Message       string      `json:"message"`
 	Metadata      Metadata    `json:"metadata"`
@@ -71,14 +71,14 @@ type ExternalBankTransfer struct {
 
 // Transaction represents a payment transaction
 type Transaction struct {
-	ID            int        `json:"id" db:"id"`
-	TransactionID string     `json:"transaction_id" db:"transaction_id"`
-	ReferenceID   string     `json:"reference_id" db:"reference_id"`
+	ID            int    `json:"id" db:"id"`
+	TransactionID string `json:"transaction_id" db:"transaction_id"`
+	// Reference     string     `json:"reference" db:"reference"`
 	FromAccountID string     `json:"from_account_id" db:"from_account_id"`
 	ToAccountID   string     `json:"to_account_id" db:"to_account_id"`
-	Amount        float64    `json:"amount" db:"amount"`
-	Fee           float64    `json:"fee" db:"fee"`
-	TotalAmount   float64    `json:"total_amount" db:"total_amount"`
+	Amount        int64      `json:"amount" db:"amount"`
+	Fee           int64      `json:"fee" db:"fee"`
+	TotalAmount   int64      `json:"total_amount" db:"total_amount"`
 	Currency      string     `json:"currency" db:"currency"`
 	Status        string     `json:"status" db:"status"`
 	Type          string     `json:"type" db:"type"`
