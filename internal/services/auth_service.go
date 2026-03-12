@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -18,26 +18,25 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 	"github.com/spf13/viper"
 	"golang.org/x/crypto/argon2"
 )
 
 type AuthService struct {
-	db        *sql.DB
-	redis     *redis.Client
-	validator *validator.Validate
+	db           *sql.DB
+	redis        *redis.Client
+	validator    *validator.Validate
+	notification *NotificationService
 }
 
-func NewAuthService(db *sql.DB, redisClient *redis.Client) *AuthService {
+func NewAuthService(db *sql.DB, redisClient *redis.Client, notificationService *NotificationService) *AuthService {
 	return &AuthService{
-		db:        db,
-		redis:     redisClient,
-		validator: validator.New(),
+		db:           db,
+		redis:        redisClient,
+		validator:    validator.New(),
+		notification: notificationService,
 	}
-}
-
-func (s *AuthService) sendErrorResponse(w http.ResponseWriter, message string, statusCode int, validationErr error) {
-	SendErrorResponse(w, message, statusCode, validationErr)
 }
 
 // Register handles user registration
@@ -48,12 +47,12 @@ func (s *AuthService) sendErrorResponse(w http.ResponseWriter, message string, s
 // @Produce json
 // @Param request body RegisterRequest true "Registration request"
 // @Success 200 {object} AuthResponse "Registration successful"
-// @Failure 400 {string} string "Invalid request"
+// @Failure 400 {string} string utils.InvalidRequest
 // @Failure 409 {string} string "Email already exists"
-// @Failure 500 {string} string "Internal Service error"
+// @Failure 500 {string} string utils.InternalServiceError
 // @Router /auth/register [post]
 func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[AUTH] Registration attempt from IP: %s", r.RemoteAddr)
+	slog.Info("auth.register.attempt", "remote_addr", r.RemoteAddr)
 
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
@@ -63,41 +62,40 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	var req models.RegisterRequest
 	if err := dec.Decode(&req); err != nil {
-		log.Printf("[AUTH] Registration failed - invalid request: %v", err)
-		s.sendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
+		slog.Error("auth.register.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		log.Printf("[AUTH] Multiple JSON objects detected")
-		s.sendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		slog.Warn("auth.register.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		log.Printf("[AUTH] Registration validation failed: %v", err)
-		s.sendErrorResponse(w, "Validation Failed", http.StatusBadRequest, err)
+		slog.Warn("auth.register.validation_failed", "error", err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
-	log.Printf("[AUTH] Registration request for email: %s", req.Email)
+	slog.Info("auth.register.request")
 
 	hashedPassword, err := hashPassword(req.Password)
 	if err != nil {
-		log.Printf("[AUTH] Password hashing failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "An Internal Error Occurred", http.StatusInternalServerError, nil)
+		slog.Error("auth.register.hash_failed", "error", err)
+		utils.SendErrorResponse(w, "An Internal Error Occurred", http.StatusFailedDependency, nil)
 		return
 	}
 
-	// Generate 10-digit account ID
-	accountID := generateAccountID()
-	// accountName := fmt.Sprintf("%s %s", req.FirstName, req.LastName)
+	accountID := req.PhoneNumber[1:]
+	slog.Info("auth.register.account_id_generated", "account_id", accountID)
 
 	// Start transaction
 	tx, err := s.db.Begin()
 	if err != nil {
-		log.Printf("[AUTH] Transaction start failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "Failed to create user", http.StatusInternalServerError, nil)
+		slog.Error("auth.register.tx_failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to create user", http.StatusFailedDependency, nil)
 		return
 	}
 	defer tx.Rollback()
@@ -118,35 +116,20 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 		SELECT id FROM new_user
 	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, req.ExpoPushToken, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
 	if err != nil {
-		log.Printf("[AUTH] User creation failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "Email or Username Already Exists", http.StatusConflict, nil)
+		slog.Error("auth.register.user_creation_failed", "error", err)
+		utils.SendErrorResponse(w, "Email or Username Already Exists", http.StatusConflict, nil)
 		return
 	}
 
-	// Commit transaction
 	if err = tx.Commit(); err != nil {
-		log.Printf("[AUTH] Transaction commit failed for %s: %v", req.Email, err)
-		s.sendErrorResponse(w, "Failed to create user", http.StatusInternalServerError, nil)
+		slog.Error("auth.register.commit_failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Create User", http.StatusFailedDependency, nil)
 		return
 	}
 
-	log.Printf("[AUTH] User created successfully - ID: %d, Email: %s", userID, req.Email)
+	slog.Info("auth.register.success", "user_id", userID)
 
-	token, err := generateJWT(userID, models.Merchant{})
-	if err != nil {
-		log.Printf("[AUTH] JWT generation failed for user %d: %v", userID, err)
-		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
-		return
-	}
-
-	response := models.AuthResponse{
-		Token: token,
-		User:  models.User{ID: userID, Email: req.Email, FirstName: req.FirstName, LastName: req.LastName, PhoneNumber: req.PhoneNumber, AccountId: accountID},
-	}
-
-	log.Printf("[AUTH] Registration successful for user %d", userID)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	utils.SendSuccessResponse(w, "Registration Successful", map[string]any{"userId": userID}, http.StatusOK)
 }
 
 // Login handles user authentication
@@ -157,7 +140,7 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param request body LoginRequest true "Login request"
 // @Success 200 {object} AuthResponse "Login successful"
-// @Failure 400 {string} string "Invalid request"
+// @Failure 400 {string} string string(utils.InvalidRequest)
 // @Failure 401 {string} string "Invalid Credentials"
 // @Failure 500 {string} string "Internal server error"
 // @Router /auth/login [post]
@@ -170,24 +153,24 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 
 	var req models.LoginRequest
 	if err := dec.Decode(&req); err != nil {
-		log.Printf("[AUTH] Login failed - invalid request: %v", err)
-		s.sendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
+		slog.Error("auth.login.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		log.Printf("[AUTH] Multiple JSON objects detected")
-		s.sendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		slog.Warn("auth.login.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		log.Printf("[AUTH] Login Validation Failed --> Received Raw Request Body: %v, Error: %v", &req, err)
-		s.sendErrorResponse(w, "Login Validation Failed", http.StatusBadRequest, err)
+		slog.Warn("auth.login.validation_failed", "error", err)
+		utils.SendErrorResponse(w, "Login Validation Failed", http.StatusBadRequest, err)
 		return
 	}
 
-	log.Printf("[AUTH] Login request for identifier: %s", req.Identifier)
+	slog.Info("auth.login.request")
 
 	var user models.User
 	var hashedPassword string
@@ -207,7 +190,7 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		SELECT 
-			u.id, u.email, u.first_name, u.last_name, u.phone_number, u.username, password, u.account_id,
+			u.id, u.email, u.first_name, u.last_name, u.phone_number, u.bvn, u.username, password, u.account_id,
 			m.id, m.business_name, m.business_type, m.tax_id, m.status, 
 			m.commission_rate, m.settlement_cycle, m.created_at, m.updated_at
 		FROM users u
@@ -215,29 +198,29 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 		WHERE u.phone_number = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(u.username) = LOWER($1)`
 
 	err := s.db.QueryRow(query, req.Identifier).Scan(
-		&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.Username, &hashedPassword, &user.AccountId,
+		&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.BVN, &user.Username, &hashedPassword, &user.AccountId,
 		&mID, &mBusinessName, &mBusinessType, &mTaxID, &mStatus,
 		&mCommissionRate, &mSettlementCycle, &mCreatedAt, &mUpdatedAt,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[AUTH] User not found for identifier: %s", req.Identifier)
-			s.sendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+			slog.Warn("auth.login.user_not_found")
+			utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
 		} else {
-			log.Printf("[AUTH] Database error during login: %v", err)
-			s.sendErrorResponse(w, "Internal server error", http.StatusInternalServerError, nil)
+			slog.Error("auth.login.db_error", "error", err)
+			utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
 		}
 		return
 	}
 
 	if !verifyPassword(req.Password, hashedPassword) {
-		log.Printf("[AUTH] Invalid Password for identifier: %s", req.Identifier)
-		s.sendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+		slog.Warn("auth.login.invalid_password")
+		utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
 		return
 	}
 
-	log.Printf("[AUTH] Password verified for user ID: %d", user.ID)
+	slog.Info("auth.login.password_verified", "user_id", user.ID)
 
 	user.Role = "consumer"
 
@@ -258,31 +241,56 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 		user.Role = "merchant"
 		user.Merchant = &merchant
 
-		id := int(mID.Int64)
-		status := mStatus.String
-
-		log.Printf("[AUTH] Merchant Found for User %d - Merchant ID: %d, Status: %s", user.ID, id, status)
+		slog.Info("auth.login.merchant_found", "user_id", user.ID, "merchant_id", int(mID.Int64), "status", mStatus.String)
 	}
 
 	var merchant models.Merchant
 	if user.Merchant != nil {
 		merchant = *user.Merchant
 	}
-	token, err := generateJWT(user.ID, merchant)
+
+	sessionID := fmt.Sprintf("%d_%d_%d", user.ID, time.Now().Unix(), rand.Int63())
+	deviceID := fmt.Sprintf("%s_%s_%s", req.DeviceInfo.Platform, req.DeviceInfo.Model, req.DeviceInfo.OSVersion)
+
+	token, err := generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
 	if err != nil {
-		log.Printf("[AUTH] JWT generation failed for user %d: %v", user.ID, err)
-		s.sendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
+		slog.Error("auth.login.jwt_failed", "user_id", user.ID, "error", err)
+		utils.SendErrorResponse(w, "Failed to generate token", http.StatusFailedDependency, nil)
 		return
 	}
 
-	response := models.AuthResponse{
-		Token: token,
-		User:  user,
+	refreshToken, err := generateRefreshToken(user.ID, sessionID)
+	if err != nil {
+		slog.Error("auth.login.refresh_token_failed", "user_id", user.ID, "error", err)
+		utils.SendErrorResponse(w, "Failed to generate token", http.StatusFailedDependency, nil)
+		return
 	}
 
-	log.Printf("[AUTH] Login successful for user %d", user.ID)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if s.redis != nil {
+		session := map[string]any{
+			"user_id":    fmt.Sprintf("%d", user.ID),
+			"device_id":  deviceID,
+			"expires_at": fmt.Sprintf("%d", time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Unix()),
+		}
+		sessionData, _ := json.Marshal(session)
+		ctx := context.Background()
+		err := s.redis.Set(ctx, utils.SessionKeyPrefix+sessionID, sessionData, time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Err()
+		if err != nil {
+			slog.Error("auth.login.session_store_failed", "error", err)
+		} else {
+			slog.Info("auth.login.session_created", "session_id", sessionID)
+		}
+	}
+
+	response := models.AuthResponse{
+		Token:        token,
+		RefreshToken: refreshToken,
+		User:         user,
+	}
+
+	slog.Info("auth.login.success", "user_id", user.ID)
+
+	utils.SendSuccessResponse(w, "Login Successful", response, http.StatusOK)
 }
 
 // Logout handles user logout
@@ -299,73 +307,27 @@ func (s *AuthService) Logout(w http.ResponseWriter, r *http.Request) {
 
 		if s.redis != nil {
 			ctx := context.Background()
-			key := fmt.Sprintf("blacklist:%s", token)
-			// Blacklist token until its expiration
-			expiry := time.Duration(viper.GetInt("jwt.expiry_hours")) * time.Hour
+
+			// Parse token to get session ID
+			claims := jwt.MapClaims{}
+			jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (any, error) {
+				return []byte(viper.GetString("jwt.secret_key")), nil
+			})
+
+			if sid, ok := claims["sid"].(string); ok {
+				s.redis.Del(ctx, utils.SessionKeyPrefix+sid)
+			}
+
+			// Blacklist token
+			key := fmt.Sprintf("BLACKLISTED_TOKEN:%s", token)
+			expiry := time.Duration(viper.GetInt("jwt.expiry_minutes")) * time.Minute
 			if err := s.redis.Set(ctx, key, "1", expiry).Err(); err != nil {
-				log.Printf("[AUTH] Failed to blacklist token: %v", err)
+				slog.Error("auth.logout.blacklist_failed", "error", err)
 			}
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Logout successful"})
-}
-
-// VerifyOTP verifies the OTP for BVN validation
-// @Summary Verify OTP
-// @Description Verify OTP sent for BVN validation
-// @Tags accounts
-// @Accept json
-// @Produce json
-// @Param request body map[string]string true "OTP verification request"
-// @Success 200 {object} map[string]interface{} "OTP verified successfully"
-// @Failure 400 {string} string "Invalid request"
-// @Failure 401 {string} string "Invalid or expired OTP"
-// @Router /accounts/verify-otp [post]
-func (s *AuthService) VerifyOTP(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		BVN string `json:"bvn" validate:"required,len=11"`
-		OTP string `json:"otp" validate:"required,len=8"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
-		return
-	}
-
-	if err := s.validator.Struct(&req); err != nil {
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
-		return
-	}
-
-	key := fmt.Sprintf("bvn_otp:%s", req.BVN)
-
-	if s.redis != nil {
-		ctx := context.Background()
-		storedOTP, err := s.redis.Get(ctx, key).Result()
-		if err != nil {
-			log.Printf("[AUTH] OTP not found or expired for BVN %s", req.BVN)
-			s.sendErrorResponse(w, "Invalid or expired OTP", http.StatusUnauthorized, nil)
-			return
-		}
-
-		if storedOTP != req.OTP {
-			log.Printf("[AUTH] Invalid OTP for BVN %s", req.BVN)
-			s.sendErrorResponse(w, "Invalid or expired OTP", http.StatusUnauthorized, nil)
-			return
-		}
-
-		s.redis.Del(ctx, key)
-	}
-
-	log.Printf("[AUTH] OTP verified successfully for BVN %s", req.BVN)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"message": "OTP Verified Successfully",
-		"valid":   true,
-	})
+	utils.SendSuccessResponse(w, "Logout Successful", nil, http.StatusOK)
 }
 
 // GetUserAccount retrieves user account details from auth token
@@ -374,44 +336,41 @@ func (s *AuthService) VerifyOTP(w http.ResponseWriter, r *http.Request) {
 // @Tags auth
 // @Produce json
 // @Success 200 {object} User "User account details"
-// @Failure 401 {string} string "Unauthorized"
+// @Failure 401 {string} string string(utils.UnauthorizedError)
 // @Failure 500 {string} string "Internal server error"
 // @Router /auth/account [get]
 func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[AUTH] User account request from IP: %s", r.RemoteAddr)
-
 	userID := r.Context().Value("userID")
 	if userID == nil {
-		log.Printf("[AUTH] Unauthorized account request - no user ID in context")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		slog.Warn("auth.account.unauthorized")
+		http.Error(w, string(utils.UnauthorizedError), http.StatusUnauthorized)
 		return
 	}
 
-	log.Printf("[AUTH] Fetching account details for user ID: %v", userID)
 	var user models.User
 	err := s.db.QueryRow("SELECT users.id, email, first_name, last_name, phone_number, users.account_id FROM users LEFT JOIN accounts ON users.id = accounts.user_id WHERE users.id = $1",
 		userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.AccountId)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[AUTH] User not found for ID: %v", userID)
+			slog.Warn("auth.account.not_found", "user_id", userID)
 			http.Error(w, "User not found", http.StatusNotFound)
 		} else {
-			log.Printf("[AUTH] Failed to fetch user details for ID %v: %v", userID, err)
-			http.Error(w, "Failed to fetch user details", http.StatusInternalServerError)
+			slog.Error("auth.account.db_error", "user_id", userID, "error", err)
+			http.Error(w, "Failed to fetch user details", http.StatusFailedDependency)
 		}
 		return
 	}
 
-	log.Printf("[AUTH] Successfully fetched account details for user: %s (ID: %d)", user.Email, user.ID)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
+	utils.SendSuccessResponse(w, "", user, http.StatusOK)
 }
 
-func generateJWT(userID int, merchant models.Merchant) (string, error) {
+func generateJWTWithSession(userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
 	claims := jwt.MapClaims{
 		"user_id": userID,
-		"nameid":  userID,
-		"exp":     time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_hours")) * time.Hour).Unix(),
+		"sub":     userID,
+		"sid":     sessionID,
+		"did":     deviceID,
+		"exp":     time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_minutes")) * time.Minute).Unix(),
 		"iss":     viper.GetString("jwt.issuer"),
 		"aud":     viper.GetString("jwt.audience"),
 	}
@@ -425,6 +384,99 @@ func generateJWT(userID int, merchant models.Merchant) (string, error) {
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(viper.GetString("jwt.secret_key")))
+}
+
+func generateRefreshToken(userID int, sessionID string) (string, error) {
+	claims := jwt.MapClaims{
+		"user_id": userID,
+		"sid":     sessionID,
+		"exp":     time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days
+		"type":    "refresh",
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(viper.GetString("jwt.secret_key")))
+}
+
+// RefreshToken handles token refresh
+// @Summary Refresh access token
+// @Description Get new access token using refresh token
+// @Tags auth
+// @Accept json
+// @Produce json
+// @Param request body map[string]string true "Refresh token"
+// @Success 200 {object} AuthResponse "Token refreshed"
+// @Failure 401 {string} string "Invalid refresh token"
+// @Router /auth/refresh [post]
+func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refreshToken" validate:"required"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
+		return
+	}
+
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(req.RefreshToken, claims, func(token *jwt.Token) (any, error) {
+		return []byte(viper.GetString("jwt.secret_key")), nil
+	})
+
+	if err != nil || !token.Valid || claims["type"] != "refresh" {
+		utils.SendErrorResponse(w, "Invalid refresh token", http.StatusUnauthorized, nil)
+		return
+	}
+
+	userID := int(claims["user_id"].(float64))
+	sessionID := claims["sid"].(string)
+
+	// Verify session exists
+	if s.redis != nil {
+		ctx := context.Background()
+		exists, _ := s.redis.Exists(ctx, utils.SessionKeyPrefix+sessionID).Result()
+		if exists == 0 {
+			utils.SendErrorResponse(w, "Session Expired", http.StatusUnauthorized, nil)
+			return
+		}
+	}
+
+	// Get user and merchant info
+	var user models.User
+	var mID sql.NullInt64
+	err = s.db.QueryRow(`
+		SELECT u.id, u.email, u.first_name, u.last_name, u.phone_number, u.username, u.account_id, m.id
+		FROM users u LEFT JOIN merchants m ON u.id = m.user_id WHERE u.id = $1
+	`, userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.Username, &user.AccountId, &mID)
+
+	if err != nil {
+		utils.SendErrorResponse(w, utils.UserNotFoundError, http.StatusUnauthorized, nil)
+		return
+	}
+
+	var merchant models.Merchant
+	if mID.Valid {
+		merchant.ID = int(mID.Int64)
+	}
+
+	// Get device ID from session
+	var sessionData map[string]string
+	if s.redis != nil {
+		ctx := context.Background()
+		data, _ := s.redis.Get(ctx, utils.SessionKeyPrefix+sessionID).Result()
+		json.Unmarshal([]byte(data), &sessionData)
+	}
+	deviceID := sessionData["device_id"]
+
+	// Generate new tokens
+	newAccessToken, _ := generateJWTWithSession(userID, merchant, sessionID, deviceID)
+	newRefreshToken, _ := generateRefreshToken(userID, sessionID)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models.AuthResponse{
+		Token:        newAccessToken,
+		RefreshToken: newRefreshToken,
+		User:         user,
+	})
 }
 
 func hashPassword(password string) (string, error) {
@@ -465,28 +517,14 @@ func verifyPassword(password, hashedPassword string) bool {
 	return string(hash) == string(computedHash)
 }
 
-func generateAccountID() string {
-	const digits = "0123456789"
-	b := make([]byte, 10)
-	for i := range b {
-		b[i] = digits[rand.Intn(len(digits))]
-	}
-	return string(b)
-}
-
-func generateOTP() string {
-	b := make([]byte, 4)
-	cryptorand.Read(b)
-	return fmt.Sprintf("%08d", (int(b[0])<<24|int(b[1])<<16|int(b[2])<<8|int(b[3]))%100000000)
-}
-
-func generateResetToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := cryptorand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.URLEncoding.EncodeToString(b), nil
-}
+// func generateAccountID() string {
+// 	const digits = "0123456789"
+// 	b := make([]byte, 10)
+// 	for i := range b {
+// 		b[i] = digits[rand.Intn(len(digits))]
+// 	}
+// 	return string(b)
+// }
 
 // ForgotPassword handles password reset request
 // @Summary Request password reset
@@ -496,67 +534,82 @@ func generateResetToken() (string, error) {
 // @Produce json
 // @Param request body map[string]string true "Email address"
 // @Success 200 {object} map[string]string "Reset token sent"
-// @Failure 400 {string} string "Invalid request"
+// @Failure 400 {string} string string(utils.InvalidRequest)
 // @Failure 404 {string} string "User not found"
 // @Router /auth/forgot-password [post]
 func (s *AuthService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email string `json:"email" validate:"required,email"`
+		Identifier string `json:"identifier" validate:"required" example:"+2348012345678"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		slog.Error("auth.forgot_password.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		slog.Warn("auth.forgot_password.validation_failed", "error", err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
 	var userID int
-	err := s.db.QueryRow("SELECT id FROM users WHERE email = $1", strings.ToLower(req.Email)).Scan(&userID)
+	err := s.db.QueryRow("SELECT id FROM users WHERE phone_number = $1 OR LOWER(email) = LOWER($1) OR LOWER(username) = LOWER($1)", req.Identifier).Scan(&userID)
 	if err != nil {
-		log.Printf("[AUTH] User not found for email: %s", req.Email)
-		s.sendErrorResponse(w, "User not found", http.StatusNotFound, nil)
+		slog.Warn("auth.forgot_password.user_not_found")
+		utils.SendErrorResponse(w, "User not found", http.StatusNotFound, nil)
 		return
 	}
 
-	token, err := generateResetToken()
+	var user models.User
+	err = s.db.QueryRow("SELECT email, phone_number FROM users WHERE id = $1", userID).Scan(&user.Email, &user.PhoneNumber)
 	if err != nil {
-		log.Printf("[AUTH] Failed to generate reset token: %v", err)
-		s.sendErrorResponse(w, "Failed to generate reset token", http.StatusInternalServerError, nil)
+		slog.Error("auth.forgot_password.fetch_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, "Failed to process request", http.StatusFailedDependency, nil)
 		return
 	}
 
-	expiresAt := time.Now().Add(1 * time.Hour)
-	_, err = s.db.Exec("INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-		userID, token, expiresAt)
-	if err != nil {
-		log.Printf("[AUTH] Failed to store reset token: %v", err)
-		s.sendErrorResponse(w, "Failed to process request", http.StatusInternalServerError, nil)
-		return
+	otp := utils.GenerateOTP()
+
+	if s.redis != nil {
+		ctx := context.Background()
+		redisKey := fmt.Sprintf("RESET_USER:%d", userID)
+		existingOTP, err := s.redis.Get(ctx, redisKey).Result()
+		if err == nil {
+			slog.Info("auth.forgot_password.otp_resend", "user_id", userID)
+			otp = existingOTP
+		} else {
+			if err = s.redis.Set(ctx, redisKey, otp, 30*time.Minute).Err(); err != nil {
+				slog.Error("auth.forgot_password.otp_store_failed", "error", err)
+				utils.SendErrorResponse(w, "Failed to process request", http.StatusFailedDependency, nil)
+				return
+			}
+			slog.Info("auth.forgot_password.otp_stored", "user_id", userID)
+		}
 	}
 
-	log.Printf("[AUTH] Password reset token generated for user %d: %s", userID, token)
+	// Send OTP via notification
+	if s.notification != nil {
+		go s.notification.SendOTPEmail(user.Email, otp, "10 minutes", models.ForgotPassword)
+		slog.Info("auth.forgot_password.otp_sent", "user_id", userID)
+	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Password reset token sent",
-		"token":   token,
-	})
+	slog.Info("auth.forgot_password.success", "user_id", userID)
+
+	utils.SendSuccessResponse(w, "Password Reset Code Sent", nil, http.StatusOK)
 }
 
 // ResetPassword handles password reset with token
 // @Summary Reset password
 // @Description Reset user password using reset token
 // @Tags auth
-// @Accept json
-// @Produce json
+// @Accept JSON
+// @Produce JSON
 // @Param request body map[string]string true "Reset token and new password"
 // @Success 200 {object} map[string]string "Password reset successful"
-// @Failure 400 {string} string "Invalid request"
-// @Failure 401 {string} string "Invalid or expired token"
+// @Failure 400 {string} string utils.InvalidRequest
+// @Failure 401 {string} string utils.TokenError
 // @Router /auth/reset-password [post]
 func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -565,71 +618,81 @@ func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.sendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		slog.Error("auth.reset_password.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		s.sendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		slog.Warn("auth.reset_password.validation_failed", "error", err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
 	var userID int
-	var expiresAt time.Time
-	var used bool
-	err := s.db.QueryRow("SELECT user_id, expires_at, used FROM password_reset_tokens WHERE token = $1",
-		req.Token).Scan(&userID, &expiresAt, &used)
-	if err != nil {
-		log.Printf("[AUTH] Invalid reset token: %s", req.Token)
-		s.sendErrorResponse(w, "Invalid or expired token", http.StatusUnauthorized, nil)
-		return
-	}
-
-	if used || time.Now().After(expiresAt) {
-		log.Printf("[AUTH] Reset token expired or already used: %s", req.Token)
-		s.sendErrorResponse(w, "Invalid or expired token", http.StatusUnauthorized, nil)
-		return
+	if s.redis != nil {
+		ctx := context.Background()
+		// Scan for RESET_USER:* key matching this OTP
+		var cursor uint64
+		keys, _, err := s.redis.Scan(ctx, cursor, "RESET_USER:*", 100).Result()
+		if err != nil {
+			slog.Error("auth.reset_password.redis_scan_failed", "error", err)
+			utils.SendErrorResponse(w, utils.TokenError, http.StatusBadRequest, nil)
+			return
+		}
+		for _, key := range keys {
+			val, err := s.redis.Get(ctx, key).Result()
+			if err == nil && val == req.Token {
+				fmt.Sscanf(key, "RESET_USER:%d", &userID)
+				break
+			}
+		}
+		if userID == 0 {
+			slog.Warn("auth.reset_password.invalid_token")
+			utils.SendErrorResponse(w, utils.TokenError, http.StatusBadRequest, nil)
+			return
+		}
+		slog.Info("auth.reset_password.otp_validated", "user_id", userID)
 	}
 
 	hashedPassword, err := hashPassword(req.Password)
 	if err != nil {
-		log.Printf("[AUTH] Password hashing failed: %v", err)
-		s.sendErrorResponse(w, "Failed to Reset Password", http.StatusInternalServerError, nil)
+		slog.Error("auth.reset_password.hash_failed", "error", err)
+		utils.SendErrorResponse(w, utils.PasswordResetError, http.StatusFailedDependency, nil)
 		return
 	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
-		log.Printf("[AUTH] Transaction start failed: %v", err)
-		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		slog.Error("auth.reset_password.tx_failed", "error", err)
+		utils.SendErrorResponse(w, utils.PasswordResetError, http.StatusFailedDependency, nil)
 		return
 	}
 	defer tx.Rollback()
 
 	_, err = tx.Exec("UPDATE users SET password = $1 WHERE id = $2", hashedPassword, userID)
 	if err != nil {
-		log.Printf("[AUTH] Failed to update password: %v", err)
-		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
-		return
-	}
-
-	_, err = tx.Exec("UPDATE password_reset_tokens SET used = TRUE WHERE token = $1", req.Token)
-	if err != nil {
-		log.Printf("[AUTH] Failed to mark token as used: %v", err)
-		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		slog.Error("auth.reset_password.update_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, utils.PasswordResetError, http.StatusFailedDependency, nil)
 		return
 	}
 
 	if err = tx.Commit(); err != nil {
-		log.Printf("[AUTH] Transaction commit failed: %v", err)
-		s.sendErrorResponse(w, "Failed to reset password", http.StatusInternalServerError, nil)
+		slog.Error("auth.reset_password.commit_failed", "error", err)
+		utils.SendErrorResponse(w, utils.PasswordResetError, http.StatusFailedDependency, nil)
 		return
 	}
 
-	log.Printf("[AUTH] Password reset successful for user %d", userID)
+	if s.redis != nil {
+		ctx := context.Background()
+		s.redis.Del(ctx, fmt.Sprintf("RESET_USER:%d", userID))
+		slog.Info("auth.reset_password.otp_deleted", "user_id", userID)
+	}
+
+	slog.Info("auth.reset_password.success", "user_id", userID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Password reset successful"})
+	json.NewEncoder(w).Encode(map[string]any{"message": "Password Reset successful", "success": true})
 }
 
 func (s *AuthService) CheckUserStatus(userID string) (bool, error) {

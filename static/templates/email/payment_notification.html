@@ -1,0 +1,44 @@
+{{define "content"}}
+<h2>Hi {{index .Data "senderFirstName"}}, {{.Body}}</h2>
+
+<div class="amount-box">
+  <div class="amount">{{index .Data "currency"}} {{index .Data "amount"}}</div>
+</div>
+
+<div>
+  <div class="detail-row">
+    <span class="label">Beneficiary Name</span>
+    <span class="value">{{index .Data "beneficiaryName"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Beneficiary Account</span>
+    <span class="value">{{index .Data "beneficiaryAcct"}}</span>
+  </div>
+    <div class="detail-row">
+    <span class="label">Beneficiary Bank Name</span>
+    <span class="value">{{index .Data "beneficiaryBankName"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Fee</span>
+    <span class="value">{{index .Data "currency"}} {{index .Data "fee"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Reference</span>
+    <span class="value">{{index .Data "reference"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Transaction Date</span>
+    <span class="value">{{index .Data "date"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Transaction ID</span>
+    <span class="value">{{index .Data "transactionId"}}</span>
+  </div>
+  <div class="detail-row">
+    <span class="label">Status</span>
+    <span class="value">
+      <span class="status-badge status-{{index .Data "statusClass"}}">{{index .Data "status"}}</span>
+    </span>
+  </div>
+</div>
+{{end}}

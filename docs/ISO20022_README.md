@@ -51,7 +51,7 @@ import (
 iso20022Service := services.NewISO20022Service()
 
 // Step 2: Create a transaction using your existing data structure
-tx := &models.Transaction{
+tx := &models.TransactionRecord{
     TransactionID: "TXN123456789",  // Your internal transaction ID
     ReferenceID:   "REF987654321",  // Reference for tracking end-to-end
     FromCardID:    "CARD001",       // NFC card that's sending money

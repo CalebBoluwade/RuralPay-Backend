@@ -12,15 +12,13 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/skip2/go-qrcode"
 	"github.com/spf13/viper"
-	"github.com/srwiley/oksvg"
-	"github.com/srwiley/rasterx"
 )
 
 type QRService struct {
@@ -35,7 +33,7 @@ func NewQRService(db *sql.DB, redis *redis.Client) *QRService {
 	}
 }
 
-func (s *QRService) GenerateQRCode(ctx context.Context, userID string) (string, string, error) {
+func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantID string) (string, string, error) {
 	nonce := s.generateNonce()
 	expiryMinutes := viper.GetInt("QR_EXPIRY_MINUTES")
 	if expiryMinutes == 0 {
@@ -44,10 +42,11 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string) (string, 
 	expiryDuration := time.Duration(expiryMinutes) * time.Minute
 	expiresAt := time.Now().Add(expiryDuration).Unix()
 	qrData := map[string]any{
-		"userId":    userID,
-		"timestamp": time.Now().Unix(),
-		"expiresAt": expiresAt,
-		"nonce":     nonce,
+		"userId":     userID,
+		"merchantId": merchantID,
+		"timestamp":  time.Now().Unix(),
+		"expiresAt":  expiresAt,
+		"nonce":      nonce,
 	}
 
 	jsonData, err := json.Marshal(qrData)
@@ -61,21 +60,9 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string) (string, 
 		return "", "", err
 	}
 
-	appScheme := viper.GetString("app.scheme")
-	if appScheme == "" {
-		appScheme = "ruralpay"
-	}
-	appRoute := viper.GetString("app.qr_route")
-	if appRoute == "" {
-		appRoute = "pay/qr"
-	}
-	appDomain := viper.GetString("app.domain")
-	if appDomain == "" {
-		appDomain = "app.ruralpay.com"
-	}
-	deepLink := fmt.Sprintf("https://%s/%s?token=%s", appDomain, appRoute, qrToken)
-	log.Println(deepLink)
-	qr, err := qrcode.New(deepLink, qrcode.Highest)
+	emvData := s.buildEMVCoQR(qrToken)
+	slog.Info("qr.generate.emvco_built")
+	qr, err := qrcode.New(emvData, qrcode.Highest)
 	if err != nil {
 		return "", "", err
 	}
@@ -92,17 +79,18 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string) (string, 
 	}
 
 	qrImage := base64.StdEncoding.EncodeToString(buf.Bytes())
-	return deepLink, qrImage, nil
+	return emvData, qrImage, nil
 }
 
 func (s *QRService) addLogoToQR(qrImg image.Image) (image.Image, error) {
-	logoPath := "./static/bank-logos/demo.svg"
-	svgData, err := os.ReadFile(logoPath)
+	logoPath := "./static/bank-logos/nibss.png"
+	file, err := os.Open(logoPath)
 	if err != nil {
 		return qrImg, nil
 	}
+	defer file.Close()
 
-	icon, err := oksvg.ReadIconStream(bytes.NewReader(svgData))
+	logo, err := png.Decode(file)
 	if err != nil {
 		return qrImg, nil
 	}
@@ -125,9 +113,14 @@ func (s *QRService) addLogoToQR(qrImg image.Image) (image.Image, error) {
 	}
 
 	logoImg := image.NewRGBA(image.Rect(0, 0, logoSize, logoSize))
-	icon.SetTarget(0, 0, float64(logoSize), float64(logoSize))
-	scanner := rasterx.NewDasher(logoSize, logoSize, rasterx.NewScannerGV(logoSize, logoSize, logoImg, logoImg.Bounds()))
-	icon.Draw(scanner, 1.0)
+	logoBounds := logo.Bounds()
+	for y := 0; y < logoSize; y++ {
+		for x := 0; x < logoSize; x++ {
+			srcX := logoBounds.Min.X + (x * logoBounds.Dx() / logoSize)
+			srcY := logoBounds.Min.Y + (y * logoBounds.Dy() / logoSize)
+			logoImg.Set(x, y, logo.At(srcX, srcY))
+		}
+	}
 
 	logoRadius := float64(logoSize) / 2
 	logoCenter := float64(logoSize) / 2
@@ -157,17 +150,44 @@ func (s *QRService) addLogoToQR(qrImg image.Image) (image.Image, error) {
 }
 
 func (s *QRService) ProcessQRCode(ctx context.Context, qrData string) (map[string]any, error) {
+	token := qrData
+	if len(qrData) > 100 {
+		if qrData[:6] == "000201" {
+			parsedToken, err := s.parseEMVCoQR(qrData)
+			if err != nil {
+				slog.Error("qr.process.emvco_parse_failed", "error", err)
+				return nil, fmt.Errorf("invalid EMVCo QR format: %v", err)
+			}
+			token = parsedToken
+		} else {
+			lastEqualIdx := -1
+			for i := len(qrData) - 1; i >= 0; i-- {
+				if qrData[i] == '=' {
+					lastEqualIdx = i
+					break
+				}
+			}
+			if lastEqualIdx > 0 && lastEqualIdx+1 < len(qrData) {
+				if qrData[lastEqualIdx+1] >= '0' && qrData[lastEqualIdx+1] <= '9' {
+					token = qrData[:lastEqualIdx+2]
+				}
+			}
+		}
+	}
+
 	expiryMinutes := viper.GetInt("QR_EXPIRY_MINUTES")
 	if expiryMinutes == 0 {
 		expiryMinutes = 5
 	}
-	key := fmt.Sprintf("qr:%s", qrData)
+	key := fmt.Sprintf("qr:%s", token)
 
 	data, err := s.redis.Get(ctx, key).Bytes()
 	if err == redis.Nil {
-		return nil, fmt.Errorf("invalid or expired QR code")
+		slog.Warn("qr.process.token_not_found")
+		return nil, fmt.Errorf("Invalid OR Expired QR code")
 	}
 	if err != nil {
+		slog.Error("qr.process.redis_error", "error", err)
 		return nil, err
 	}
 
@@ -204,6 +224,7 @@ func (s *QRService) ProcessQRCode(ctx context.Context, qrData string) (map[strin
 
 	s.redis.Del(ctx, key)
 
+	slog.Info("qr.process.success")
 	return result, nil
 }
 
@@ -211,4 +232,134 @@ func (s *QRService) generateNonce() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+func (s *QRService) buildEMVCoQR(token string) string {
+	payloadFormatIndicator := "000201"
+	pointOfInitiation := "010212"
+
+	appDomain := viper.GetString("app.domain")
+	if appDomain == "" {
+		appDomain = "app.ruralpay.com"
+	}
+	appRoute := viper.GetString("app.qr_route")
+	if appRoute == "" {
+		appRoute = "pay/qr"
+	}
+	deepLink := fmt.Sprintf("https://%s/%s?token=%s", appDomain, appRoute, token)
+
+	merchantID := viper.GetString("emvco.merchant_id")
+	if merchantID == "" {
+		merchantID = "RURALPAY"
+	}
+
+	merchantAccountInfo := fmt.Sprintf("26%02d00%02d%s01%02d%s",
+		len(fmt.Sprintf("00%02d%s01%02d%s", len(merchantID), merchantID, len(deepLink), deepLink)),
+		len(merchantID), merchantID,
+		len(deepLink), deepLink)
+
+	transactionCurrency := "5303566"
+	countryCode := "5802NG"
+
+	merchantName := viper.GetString("emvco.merchant_name")
+	if merchantName == "" {
+		merchantName = "RuralPay"
+	}
+	merchantNameField := fmt.Sprintf("59%02d%s", len(merchantName), merchantName)
+
+	merchantCity := viper.GetString("emvco.merchant_city")
+	if merchantCity == "" {
+		merchantCity = "Lagos"
+	}
+	merchantCityField := fmt.Sprintf("60%02d%s", len(merchantCity), merchantCity)
+
+	payload := payloadFormatIndicator + pointOfInitiation + merchantAccountInfo + transactionCurrency + countryCode + merchantNameField + merchantCityField
+
+	crc := s.calculateCRC16(payload + "6304")
+	return payload + fmt.Sprintf("6304%04X", crc)
+}
+
+func (s *QRService) calculateCRC16(data string) uint16 {
+	var crc uint16 = 0xFFFF
+	for i := 0; i < len(data); i++ {
+		crc ^= uint16(data[i]) << 8
+		for j := 0; j < 8; j++ {
+			if crc&0x8000 != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc & 0xFFFF
+}
+
+func (s *QRService) parseEMVCoQR(qrData string) (string, error) {
+	if len(qrData) < 10 {
+		return "", fmt.Errorf("QR data too short")
+	}
+
+	i := 0
+	for i < len(qrData)-4 {
+		if i+4 > len(qrData) {
+			break
+		}
+		tag := qrData[i : i+2]
+		lengthStr := qrData[i+2 : i+4]
+		length := 0
+		fmt.Sscanf(lengthStr, "%02d", &length)
+
+		if i+4+length > len(qrData) {
+			break
+		}
+		value := qrData[i+4 : i+4+length]
+
+		if tag == "26" {
+			token, err := s.parseTag26(value)
+			if err == nil {
+				return token, nil
+			}
+		}
+
+		i += 4 + length
+	}
+
+	return "", fmt.Errorf("token not found in QR data")
+}
+
+func (s *QRService) parseTag26(data string) (string, error) {
+	i := 0
+	for i < len(data) {
+		if i+4 > len(data) {
+			break
+		}
+		tag := data[i : i+2]
+		lengthStr := data[i+2 : i+4]
+		length := 0
+		fmt.Sscanf(lengthStr, "%02d", &length)
+
+		if i+4+length > len(data) {
+			break
+		}
+		value := data[i+4 : i+4+length]
+
+		if tag == "01" {
+			if len(value) > 8 && value[:8] == "https://" {
+				tokenStart := -1
+				for j := 0; j < len(value); j++ {
+					if j+6 < len(value) && value[j:j+7] == "token=" {
+						tokenStart = j + 7
+						break
+					}
+				}
+				if tokenStart > 0 && tokenStart < len(value) {
+					return value[tokenStart:], nil
+				}
+			}
+		}
+
+		i += 4 + length
+	}
+
+	return "", fmt.Errorf("URL not found in tag 26")
 }

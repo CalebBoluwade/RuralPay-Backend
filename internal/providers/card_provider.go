@@ -7,8 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -39,15 +40,12 @@ func (p *CardPaymentProvider) GetPaymentMode() models.PaymentMode {
 }
 
 func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
-	log.Printf("[CardProvider] Validating Card Payment --> [Amount]=%d", req.Amount)
+	slog.Info("validate.card.request", "amount", req.Amount)
 
 	if req.FromAccount == "" {
-		log.Printf("[CardProvider] Validation Failed: Card ID is Empty")
-
-		return errors.New("Card ID is required")
+		return errors.New("Debit Card is required")
 	}
 	if req.Amount <= 0 {
-		log.Printf("[CardProvider] Validation failed: invalid amount=%d", req.Amount)
 		return errors.New("amount must be positive")
 	}
 
@@ -57,35 +55,29 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[CardProvider] Validation Failed: card not found: %s", req.FromAccount)
 			return errors.New("card not found")
 		}
-		log.Printf("[CardProvider] Database error during validation: %v", err)
-		return errors.New("validation failed")
+		slog.Error("card.validate.db_error", "error", err)
+		return errors.New(string(utils.ValidationError))
 	}
 
-	log.Printf("[CardProvider] Card Status: %s, balance: %d", status, balance)
 	if status != "ACTIVE" {
-		log.Printf("[CardProvider] Validation failed: card not active, status=%s", status)
 		return errors.New("card not active")
 	}
 
 	if balance < req.Amount {
-		log.Printf("[CardProvider] Validation failed: insufficient balance, required=%d, available=%d", req.Amount, balance)
 		return errors.New("insufficient balance")
 	}
 
-	log.Printf("[CardProvider] Validation passed")
 	return nil
 }
 
 func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
-	log.Printf("[CardProvider] Processing Card Payment via ISO 8583: [TransactionID]=%s", req.TransactionID)
-	log.Printf("[CardProvider] Payment request metadata: %+v", req.Metadata)
+	slog.Info("card.process.start", "tx_id", req.TransactionID)
 
 	cardReq, ok := req.Metadata["cardPaymentRequest"].(*models.CardPaymentRequest)
 	if !ok {
-		log.Printf("[CardProvider] Failed to extract CardPaymentRequest from metadata")
+		slog.Error("card.process.invalid_request", "tx_id", req.TransactionID)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -96,12 +88,10 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, errors.New("invalid card payment request")
 	}
 
-	log.Printf("[CardProvider] Building ISO 8583 message: [PAN]=%s, [Amount]=%d, [TxType]=%s",
-		utils.MaskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)), cardReq.Amount, cardReq.TxType)
-
+	slog.Info("card.process.building_iso8583", "tx_id", req.TransactionID)
 	isoMsg, err := p.iso8583Service.BuildISO8583Message(cardReq)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to build ISO 8583 message: %v", err)
+		slog.Error("card.process.iso8583_build_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -112,11 +102,9 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	log.Printf("[CardProvider] ISO 8583 Message Built Successfully, size: %d bytes", len(isoMsg))
-
-	respMsg, err := p.iso8583Service.ProcessMessage(ctx, isoMsg)
+	_, err = p.iso8583Service.ProcessMessage(ctx, isoMsg)
 	if err != nil {
-		log.Printf("[CardProvider] ISO 8583 processing failed: %v", err)
+		slog.Error("card.process.iso8583_process_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -127,12 +115,9 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	log.Printf("[CardProvider] ISO 8583 response received: %d bytes", len(respMsg))
-	log.Printf("[CardProvider] ISO 8583 response (hex): %x", respMsg)
-
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to Begin Transaction: %v", err)
+		slog.Error("card.process.tx_begin_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, err
 	}
 	defer tx.Rollback()
@@ -144,19 +129,18 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	hsmTx := &hsm.Transaction{
 		ID:            req.TransactionID,
 		FromAccountID: req.FromAccount,
-		ToAccountID:   req.ToAccount,
+		ToAccountID:   req.BeneficiaryAccountNumber,
 		Amount:        float64(req.Amount),
 		Timestamp:     timestamp,
 		Nonce:         nonce,
 	}
 	signature, err := p.HSM.SignTransaction(hsmTx)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to sign transaction: %v", err)
+		slog.Error("card.process.sign_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, errors.New("security signing failed")
 	}
 
-	log.Printf("[CardProvider] Inserting Transaction and updating daily spent: [txID]=%s, [Card]=%s, [Amount]=%d",
-		req.TransactionID, utils.MaskPAN(req.FromAccount), req.Amount)
+	slog.Info("card.process.inserting", "tx_id", req.TransactionID)
 
 	// Update metadata with signing info
 	if req.Metadata == nil {
@@ -167,10 +151,10 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
 	_, err = tx.ExecContext(ctx, `
-		WITH user_info AS (
-			SELECT a.user_id 
-			FROM accounts a 
-			WHERE a.card_id = $2 
+		WITH merchant_info AS (
+			SELECT m.account_id 
+			FROM merchants m 
+			WHERE m.id = $2 
 			LIMIT 1
 		),
 		limit_update AS (
@@ -181,24 +165,24 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			RETURNING ul.user_id
 		)
 		INSERT INTO transactions 
-		(transaction_id, from_card_id, to_card_id, amount, total_amount, type, payment_mode, status, user_id, created_at, signature, metadata)
+		(transaction_id, debit_id, credit_id, amount, total_amount, type, payment_mode, status, user_id, created_at, signature, metadata)
 		SELECT $1, $2, $3, $4, $4, 'DEBIT', 'CARD', 'COMPLETED', ui.user_id, NOW(), $5, $6
 		FROM user_info ui
-	`, req.TransactionID, req.FromAccount, req.ToAccount, req.Amount, signature, metadataJSON)
+	`, req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, signature, metadataJSON)
 
 	if err != nil {
-		log.Printf("[CardProvider] Failed to Insert Transaction or Update Daily Spent: %v", err)
+		slog.Error("card.process.insert_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("[CardProvider] Failed to Commit Transaction: %v", err)
+		slog.Error("card.process.commit_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, err
 	}
 
 	resp, err := p.nibssClient.ProcessCardSettlement(isoMsg)
 	if err != nil {
-		log.Printf("[CardProvider] Settlement Failed: %v", err)
+		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
 		p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)
 		return &models.PaymentResponse{
 			Success:       false,
@@ -213,7 +197,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	respJSON, _ := json.Marshal(resp)
 	p.DB.Exec(`UPDATE transactions SET settlement_response = $1 WHERE transaction_id = $2`, respJSON, req.TransactionID)
 
-	log.Printf("[CardProvider] Payment Successful: [txID]=%s", req.TransactionID)
+	slog.Info("card.process.success", "tx_id", req.TransactionID)
 	return &models.PaymentResponse{
 		Success:       true,
 		TransactionID: req.TransactionID,
@@ -227,57 +211,50 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 func (p *CardPaymentProvider) DecryptPIICredentials(encryptedText string) string {
 	plaintext, err := p.HSM.DecryptPII(encryptedText)
 	if err != nil {
-		log.Printf("[CardProvider] Failed to Decrypt PII: %v", err)
+		slog.Error("card.decrypt_pii_failed", "error", err)
 		return ""
 	}
 	return plaintext
 }
 
 func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[CardProvider] Starting Card Payment")
+	slog.Info("card.handle_payment.start")
 
-	userID, ok := r.Context().Value("userID").(string)
-	if !ok || userID == "" {
-		log.Printf("[CardProvider] Unauthorized: userID not found in context")
-		services.SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
-		return
-	}
-	log.Printf("[CardProvider] UserID from context: %s", userID)
+	userID, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+	slog.Info("card.handle_payment.context", "user_id", userID, "merchant_id", merchantID)
 
 	var cardReq models.CardPaymentRequest
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&cardReq); err != nil {
-		log.Printf("[CardProvider] Error Decoding Payment Request: %v", err)
-		services.SendErrorResponse(w, "Invalid Request Body", http.StatusBadRequest, nil)
+		slog.Error("card.handle_payment.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
-	log.Printf("[CardProvider] Card Payment Request: [TransactionID]=%s, [Amount]=%d, [Type]=%s, [PAN]=%s",
-		cardReq.TransactionID, cardReq.Amount, cardReq.TxType, utils.MaskPAN(p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)))
+	slog.Info("card.handle_payment.request", "tx_id", cardReq.TransactionID, "amount", cardReq.Amount, "type", cardReq.TxType)
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		log.Printf("[CardProvider] Multiple JSON objects detected")
-		services.SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		slog.Warn("card.handle_payment.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	req := &models.PaymentRequest{
-		TransactionID: cardReq.TransactionID,
-		UserID:        userID,
-		FromAccount:   p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN),
-		Amount:        cardReq.Amount,
-		PaymentMode:   models.PaymentModeCard,
+		TransactionID:            cardReq.TransactionID,
+		UserID:                   strconv.Itoa(userID),
+		FromAccount:              p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN),
+		BeneficiaryAccountNumber: p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN),
+		Amount:                   cardReq.Amount,
+		PaymentMode:              models.PaymentModeCard,
 		Metadata: map[string]any{
 			"cardPaymentRequest": &cardReq,
 		},
 		Location: cardReq.Location,
 	}
 
-	log.Printf("[CardProvider] Created Payment Request: txID=%s", req.TransactionID)
-
 	if cachedStatus, found := p.checkIdempotency(req.TransactionID); found {
-		log.Printf("[CardProvider] Idempotent request detected: txID=%s, status=%s", req.TransactionID, cachedStatus)
+		slog.Info("card.handle_payment.idempotent", "tx_id", req.TransactionID, "status", cachedStatus)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"success":       cachedStatus == "COMPLETED" || cachedStatus == "PENDING",
@@ -291,16 +268,16 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 
 	response, err := p.ProcessPayment(r.Context(), req)
 	if err != nil {
-		log.Printf("[CardProvider] Payment Failed: %v", err)
+		slog.Error("card.handle_payment.failed", "tx_id", req.TransactionID, "error", err)
 		p.Audit.LogError(req.TransactionID, req.FromAccount, err)
-		services.SendErrorResponse(w, "Payment Processing Failed", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, "Payment Processing Failed", http.StatusFailedDependency, nil)
 		return
 	}
 
 	p.setIdempotency(req.TransactionID, response.Status)
-	p.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.ToAccount, req.Amount, response.Status)
+	p.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
 
-	log.Printf("[CardProvider] Sending Response: success=%v, status=%s", response.Success, response.Status)
+	slog.Info("card.handle_payment.response", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
 	w.Header().Set("Content-Type", "application/json")
 	if response.Success {
 		w.WriteHeader(http.StatusOK)

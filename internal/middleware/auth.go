@@ -2,78 +2,177 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/services"
+	"github.com/ruralpay/backend/internal/utils"
 	"github.com/spf13/viper"
 )
 
 var redisClient *redis.Client
 var authService *services.AuthService
+var validator *services.ValidationHelper
+var cfg models.SessionConfig
 
-func InitAuthMiddleware(redis *redis.Client, auth *services.AuthService) {
+func InitAuthMiddleware(redis *redis.Client, auth *services.AuthService, config models.SessionConfig) {
 	redisClient = redis
 	authService = auth
+	validator = services.NewValidationHelper()
+	cfg = config
 }
 
-func AuthMiddleware(next http.Handler) http.Handler {
+func extractBearerToken(r *http.Request) (string, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return "", fmt.Errorf("missing authorization header")
+	}
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return "", fmt.Errorf("invalid authorization header format")
+	}
+	return parts[1], nil
+}
+
+func checkTokenBlacklist(token string) bool {
+	if redisClient == nil {
+		return false
+	}
+	key := fmt.Sprintf("blacklist:%s", token)
+	exists, _ := redisClient.Exists(context.Background(), key).Result()
+	return exists > 0
+}
+
+func parseSessionClaims(token string) (sid, deviceID string, err error) {
+	claims := jwt.MapClaims{}
+	jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+		return []byte(viper.GetString("jwt.secret_key")), nil
+	})
+	var hasSid, hasDeviceID bool
+	sid, hasSid = claims["sid"].(string)
+	deviceID, hasDeviceID = claims["did"].(string)
+	if !hasSid || !hasDeviceID {
+		return "", "", fmt.Errorf("missing session claims")
+	}
+	return sid, deviceID, nil
+}
+
+func validateSession(ctx context.Context, sessionKey, deviceID string) error {
+	if redisClient == nil {
+		return nil
+	}
+	sessionData, err := redisClient.Get(ctx, sessionKey).Result()
+	if err != nil {
+		slog.Warn("auth.session.not_found", "session_key", sessionKey, "error", err)
+		return fmt.Errorf("session not found")
+	}
+	var data map[string]string
+	if err := json.Unmarshal([]byte(sessionData), &data); err != nil {
+		slog.Error("auth.session.unmarshal_failed", "error", err)
+		return fmt.Errorf("invalid session data")
+	}
+	expiresAt, _ := strconv.ParseInt(data["expires_at"], 10, 64)
+	if time.Now().Unix() > expiresAt {
+		redisClient.Del(ctx, sessionKey)
+		return fmt.Errorf("session expired")
+	}
+	if data["device_id"] != deviceID {
+		redisClient.Del(ctx, sessionKey)
+		return fmt.Errorf("device mismatch")
+	}
+	redisClient.Expire(ctx, sessionKey, cfg.InactivityTTL)
+	return nil
+}
+
+func AuthSessionMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Get token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
-			http.Error(w, "Authorization Header required", http.StatusUnauthorized)
+		token, err := extractBearerToken(r)
+		if err != nil {
+			validator.SendErrorResponse(w, "Invalid Authorization Header", http.StatusUnauthorized, nil)
 			return
 		}
 
-		// Extract token
-		parts := strings.Split(authHeader, " ")
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			http.Error(w, "Invalid Authorization", http.StatusUnauthorized)
+		if checkTokenBlacklist(token) {
+			validator.SendErrorResponse(w, "Token Revoked", http.StatusUnauthorized, nil)
 			return
 		}
 
-		token := parts[1]
-
-		// Check if token is blacklisted
-		if redisClient != nil {
-			ctx := context.Background()
-			key := fmt.Sprintf("blacklist:%s", token)
-			if exists, _ := redisClient.Exists(ctx, key).Result(); exists > 0 {
-				http.Error(w, "Token Revoked", http.StatusUnauthorized)
-				return
-			}
-		}
-
-		// Validate token (implement your JWT validation here)
 		userID, merchantID, err := validateToken(token)
 		if err != nil {
-			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			validator.SendErrorResponse(w, "Invalid User Token", http.StatusUnauthorized, nil)
 			return
 		}
 
-		// Check user status
+		sid, deviceID, err := parseSessionClaims(token)
+		if err != nil {
+			validator.SendErrorResponse(w, "Invalid Token: Missing Session Claims", http.StatusUnauthorized, nil)
+			return
+		}
+
+		ctx := r.Context()
+		if err := validateSession(ctx, utils.SessionKeyPrefix+sid, deviceID); err != nil {
+			switch err.Error() {
+			case "session not found", "invalid session data":
+				validator.SendErrorResponse(w, strings.Title(err.Error()), http.StatusForbidden, nil)
+			default:
+				validator.SendErrorResponse(w, strings.Title(err.Error()), http.StatusUnauthorized, nil)
+			}
+			return
+		}
+
 		active, err := authService.CheckUserStatus(userID)
 		if err != nil {
-			http.Error(w, "Internal Service Error", http.StatusInternalServerError)
+			validator.SendErrorResponse(w, "Invalid User Status", http.StatusUnauthorized, nil)
 			return
 		}
-
 		if !active {
-			http.Error(w, "User is not active", http.StatusUnauthorized)
+			validator.SendErrorResponse(w, "User Is Not Active", http.StatusUnauthorized, nil)
 			return
 		}
 
-		// Add user ID to context
-		ctx := context.WithValue(r.Context(), "userID", userID)
+		ctx = context.WithValue(ctx, "userID", userID)
 		if merchantID != nil {
-			ctx = context.WithValue(ctx, "merchantID", merchantID)
+			ctx = context.WithValue(ctx, "merchantID", fmt.Sprintf("%v", merchantID))
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func CreateSession(ctx context.Context, rdb *redis.Client, sessionID string, s models.Session) error {
+	data, _ := json.Marshal(s)
+
+	return rdb.Set(ctx,
+		utils.SessionKeyPrefix+sessionID,
+		data,
+		cfg.InactivityTTL, // inactivity TTL
+	).Err()
+}
+
+func RotateRefreshToken(
+	ctx context.Context,
+	rdb *redis.Client,
+	sid string,
+	newRefreshHash string,
+	cfg models.SessionConfig,
+) error {
+
+	key := utils.SessionKeyPrefix + sid
+
+	pipe := rdb.TxPipeline()
+
+	pipe.HSet(ctx, key, "refresh_hash", newRefreshHash)
+	pipe.Expire(ctx, key, cfg.InactivityTTL)
+
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func validateToken(tokenString string) (string, any, error) {
@@ -86,27 +185,24 @@ func validateToken(tokenString string) (string, any, error) {
 	})
 
 	if err != nil || !token.Valid {
+		slog.Warn("auth.token.invalid", "error", err)
 		return "", nil, err
 	}
 
-	// Validate claims
 	issuer := viper.GetString("jwt.issuer")
 	audience := viper.GetString("jwt.audience")
 
 	if issuer != "" {
 		if iss, ok := claims["iss"].(string); !ok || iss != issuer {
-			return "", nil, fmt.Errorf("invalid issuer")
+			return "", nil, fmt.Errorf("Invalid issuer")
 		}
 	}
 
 	if audience != "" {
 		if aud, ok := claims["aud"].(string); !ok || aud != audience {
-			return "", nil, fmt.Errorf("invalid audience")
+			return "", nil, fmt.Errorf("Invalid Audience")
 		}
 	}
 
-	userID := claims["user_id"]
-	merchantID := claims["merchant_id"]
-	fmt.Printf("[AUTH] Token Validated --> [USER ID]: %v, [Merchant ID]: %v \n", userID, merchantID)
-	return fmt.Sprintf("%v", userID), merchantID, nil
+	return fmt.Sprintf("%v", claims["user_id"]), claims["merchant_id"], nil
 }

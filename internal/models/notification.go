@@ -15,6 +15,9 @@ const (
 	PaymentSent     NotificationType = "payment_sent"
 	PaymentFailed   NotificationType = "payment_failed"
 	PaymentPending  NotificationType = "payment_pending"
+	TransactionOTP  NotificationType = "TransactionOTP"
+	ForgotPassword  NotificationType = "ForgotPassword"
+	ValidateAccount NotificationType = "ValidateAccount"
 )
 
 type NotificationPayload struct {
@@ -27,4 +30,6 @@ type NotificationPayload struct {
 	PhoneNumber   string
 	ExpoPushToken string
 	Preferences   []NotificationChannel
+	FeedbackURL   string
+	BaseURL       string
 }

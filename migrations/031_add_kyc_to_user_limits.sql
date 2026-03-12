@@ -1,0 +1,6 @@
+ALTER TABLE user_limits
+    ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(20) NOT NULL DEFAULT 'UNVERIFIED',
+    ADD COLUMN IF NOT EXISTS kyc_level  SMALLINT    NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS kyc_verified_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_user_limits_kyc_status ON user_limits(kyc_status);

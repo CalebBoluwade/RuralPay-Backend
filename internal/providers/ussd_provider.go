@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type USSDPaymentProvider struct {
@@ -31,16 +32,14 @@ func (p *USSDPaymentProvider) GetPaymentMode() models.PaymentMode {
 }
 
 func (p *USSDPaymentProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
-	log.Printf("[USSDProvider] Validating payment: from=%s, amount=%d", req.FromAccount, req.Amount)
+	slog.Info("ussd.validate", "from", req.FromAccount, "amount", req.Amount)
 
 	if req.Metadata == nil || req.Metadata["ussdCode"] == nil {
-		log.Printf("[USSDProvider] Validation failed: USSD code is missing")
 		return errors.New("USSD code is required")
 	}
 
 	ussdCode, ok := req.Metadata["ussdCode"].(string)
 	if !ok {
-		log.Printf("[USSDProvider] Validation failed: invalid USSD code format")
 		return errors.New("invalid USSD code format")
 	}
 
@@ -51,17 +50,16 @@ func (p *USSDPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 		}
 	}
 
-	log.Printf("[USSDProvider] Validating USSD code, type: %s", codeType)
 	hashedCode := p.hashCode(ussdCode)
 
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to begin transaction: %v", err)
+		slog.Error("ussd.validate.tx_begin_failed", "error", err)
 		return err
 	}
 	defer tx.Rollback()
 
-	var transactionID, userID string
+	var transactionId, userID string
 	var amount int64
 	var expiresAt time.Time
 	var used bool
@@ -70,39 +68,32 @@ func (p *USSDPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 		FROM ussd_codes
 		WHERE code_hash = $1 AND code_type = $2
 		FOR UPDATE
-	`, hashedCode, codeType).Scan(&transactionID, &userID, &amount, &expiresAt, &used)
+	`, hashedCode, codeType).Scan(&transactionId, &userID, &amount, &expiresAt, &used)
 
 	if err == sql.ErrNoRows {
-		log.Printf("[USSDProvider] Validation failed: invalid USSD code")
 		return errors.New("invalid code")
 	}
 	if err != nil {
-		log.Printf("[USSDProvider] Database error: %v", err)
+		slog.Error("ussd.validate.db_error", "error", err)
 		return err
 	}
 
-	log.Printf("[USSDProvider] USSD code found: used=%v, expires=%v", used, expiresAt)
 	if used {
-		log.Printf("[USSDProvider] Validation failed: code already used")
 		return errors.New("code already used")
 	}
 
 	if time.Now().After(expiresAt) {
-		log.Printf("[USSDProvider] Validation failed: code expired at %v", expiresAt)
 		return errors.New("code expired")
 	}
 
 	if userID != req.UserID {
-		log.Printf("[USSDProvider] Validation failed: code belongs to different user")
 		return errors.New("USSD code does not belong to user")
 	}
 
 	if amount != req.Amount {
-		log.Printf("[USSDProvider] Validation failed: amount mismatch, expected=%d, got=%d", amount, req.Amount)
 		return errors.New("amount mismatch")
 	}
 
-	log.Printf("[USSDProvider] Marking USSD code as used")
 	_, err = tx.ExecContext(ctx, `
 		UPDATE ussd_codes
 		SET used = true, used_at = $1
@@ -110,53 +101,47 @@ func (p *USSDPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 	`, time.Now(), hashedCode)
 
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to mark code as used: %v", err)
+		slog.Error("ussd.validate.mark_used_failed", "error", err)
 		return err
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Printf("[USSDProvider] Failed to commit USSD code update: %v", err)
+		slog.Error("ussd.validate.commit_failed", "error", err)
 		return err
 	}
 
 	if req.Amount <= 0 {
-		log.Printf("[USSDProvider] Validation failed: invalid amount=%d", req.Amount)
 		return errors.New("amount must be positive")
 	}
 
 	var balance int64
 	var status string
-	err = p.DB.QueryRowContext(ctx, `SELECT balance, status FROM accounts WHERE card_id = $1 OR account_id = $1`, req.FromAccount).Scan(&balance, &status)
+	err = p.DB.QueryRowContext(ctx, `SELECT balance, status FROM accounts WHERE account_id = $1`, req.FromAccount).Scan(&balance, &status)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[USSDProvider] Validation failed: account not found: %s", req.FromAccount)
 			return errors.New("account not found")
 		}
-		log.Printf("[USSDProvider] Database error during account check: %v", err)
-		return errors.New("validation failed")
+		slog.Error("ussd.validate.account_db_error", "error", err)
+		return errors.New(string(utils.ValidationError))
 	}
 
-	log.Printf("[USSDProvider] Account status: %s, balance: %d", status, balance)
 	if status != "ACTIVE" {
-		log.Printf("[USSDProvider] Validation failed: account not active, status=%s", status)
 		return errors.New("account not active")
 	}
 
 	if balance < req.Amount {
-		log.Printf("[USSDProvider] Validation failed: insufficient balance, required=%d, available=%d", req.Amount, balance)
 		return errors.New("insufficient balance")
 	}
 
-	log.Printf("[USSDProvider] Validation passed")
 	return nil
 }
 
 func (p *USSDPaymentProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
-	log.Printf("[USSDProvider] Starting payment processing: txID=%s", req.TransactionID)
+	slog.Info("ussd.process.start", "tx_id", req.TransactionID)
 
 	if err := p.ValidatePayment(ctx, req); err != nil {
-		log.Printf("[USSDProvider] Payment validation failed: %v", err)
+		slog.Warn("ussd.process.validation_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -167,18 +152,16 @@ func (p *USSDPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	log.Printf("[USSDProvider] Beginning database transaction")
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to begin transaction: %v", err)
+		slog.Error("ussd.process.tx_begin_failed", "error", err)
 		return nil, err
 	}
 	defer tx.Rollback()
 
-	log.Printf("[USSDProvider] Debiting account: %s, amount: %d", req.FromAccount, req.Amount)
-	_, err = tx.ExecContext(ctx, `UPDATE accounts SET balance = balance - $1 WHERE card_id = $2 OR account_id = $2`, req.Amount, req.FromAccount)
+	_, err = tx.ExecContext(ctx, `UPDATE accounts SET balance = balance - $1 WHERE account_id = $2`, req.Amount, req.FromAccount)
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to debit account: %v", err)
+		slog.Error("ussd.process.debit_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -189,10 +172,9 @@ func (p *USSDPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	log.Printf("[USSDProvider] Crediting account: %s, amount: %d", req.ToAccount, req.Amount)
-	_, err = tx.ExecContext(ctx, `UPDATE accounts SET balance = balance + $1 WHERE card_id = $2 OR account_id = $2`, req.Amount, req.ToAccount)
+	_, err = tx.ExecContext(ctx, `UPDATE accounts SET balance = balance + $1 WHERE account_id = $2`, req.Amount, req.BeneficiaryAccountNumber)
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to credit account: %v", err)
+		slog.Error("ussd.process.credit_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -203,26 +185,24 @@ func (p *USSDPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	log.Printf("[USSDProvider] Inserting transaction record")
 	metadata, _ := json.Marshal(req.Metadata)
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO transactions 
-		(transaction_id, from_card_id, to_card_id, amount, currency, narration, type, payment_mode, status, metadata, created_at)
+		(transaction_id, debit_id, credit_id, amount, currency, narration, type, payment_mode, status, metadata, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, 'DEBIT', 'USSD', 'COMPLETED', $7, NOW())
-	`, req.TransactionID, req.FromAccount, req.ToAccount, req.Amount, req.Currency, req.Narration, metadata)
+	`, req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, req.Currency, req.Narration, metadata)
 
 	if err != nil {
-		log.Printf("[USSDProvider] Failed to insert transaction: %v", err)
+		slog.Error("ussd.process.insert_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, err
 	}
 
-	log.Printf("[USSDProvider] Committing transaction")
 	if err := tx.Commit(); err != nil {
-		log.Printf("[USSDProvider] Failed to commit transaction: %v", err)
+		slog.Error("ussd.process.commit_failed", "tx_id", req.TransactionID, "error", err)
 		return nil, err
 	}
 
-	log.Printf("[USSDProvider] Payment Successful")
+	slog.Info("ussd.process.success", "tx_id", req.TransactionID)
 	return &models.PaymentResponse{
 		Success:       true,
 		TransactionID: req.TransactionID,

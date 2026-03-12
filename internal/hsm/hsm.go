@@ -62,8 +62,8 @@ type HSMInterface interface {
 	DecryptPII(encryptedData string) (string, error)
 }
 
-// HSMServer implements HSMInterface
-type HSMServer struct {
+// SoftwareHSM implements HSMInterface
+type SoftwareHSM struct {
 	keys         map[string]*KeyPair
 	masterKey    []byte
 	mu           sync.RWMutex
@@ -103,6 +103,7 @@ type Transaction struct {
 
 // Config holds HSM configuration
 type Config struct {
+	HSMType         string // "software" or "hardware"
 	MasterKey       string
 	KeyStorePath    string
 	KeyRotationDays int
@@ -110,13 +111,25 @@ type Config struct {
 	Salt            []byte // Optional: if nil, will be generated
 }
 
-// InitHSM initializes the HSM server
-func InitHSM(config Config) (*HSMServer, error) {
+// InitHSM is a factory function that initializes the appropriate HSM implementation.
+func InitHSM(config Config) (HSMInterface, error) {
+	switch config.HSMType {
+	case "hardware":
+		return NewHardwareHSM()
+	case "software":
+		return NewSoftwareHSM(config)
+	default:
+		return nil, fmt.Errorf("invalid HSMType: %s", config.HSMType)
+	}
+}
+
+// NewSoftwareHSM initializes the software-based HSM server.
+func NewSoftwareHSM(config Config) (*SoftwareHSM, error) {
 	if config.MasterKey == "" {
-		return nil, errors.New("Master Key Required")
+		return nil, errors.New("Master Key Required for software HSM")
 	}
 
-	log.Println("HSM Initialized Successfully")
+	log.Println("Software HSM Initialized Successfully")
 
 	// Generate or use provided salt
 	salt := config.Salt
@@ -130,7 +143,7 @@ func InitHSM(config Config) (*HSMServer, error) {
 	// Derive master key using Argon2
 	masterKey := deriveKey(config.MasterKey, string(salt), 32)
 
-	hsm := &HSMServer{
+	hsm := &SoftwareHSM{
 		keys:         make(map[string]*KeyPair),
 		masterKey:    masterKey,
 		keyStorePath: config.KeyStorePath,
@@ -153,7 +166,7 @@ func InitHSM(config Config) (*HSMServer, error) {
 }
 
 // GenerateKeyPair creates a new RSA key pair
-func (h *HSMServer) GenerateKeyPair(keyID string) (*KeyPair, error) {
+func (h *SoftwareHSM) GenerateKeyPair(keyID string) (*KeyPair, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -195,7 +208,7 @@ func (h *HSMServer) GenerateKeyPair(keyID string) (*KeyPair, error) {
 }
 
 // GetPublicKey returns the public key in PEM format
-func (h *HSMServer) GetPublicKey(keyID string) (string, error) {
+func (h *SoftwareHSM) GetPublicKey(keyID string) (string, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -223,7 +236,7 @@ func (h *HSMServer) GetPublicKey(keyID string) (string, error) {
 }
 
 // EncryptData encrypts data using AES-GCM
-func (h *HSMServer) EncryptData(keyID string, plaintext []byte) ([]byte, error) {
+func (h *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -261,7 +274,7 @@ func (h *HSMServer) EncryptData(keyID string, plaintext []byte) ([]byte, error) 
 }
 
 // DecryptData decrypts AES-GCM encrypted data
-func (h *HSMServer) DecryptData(keyID string, ciphertext []byte) ([]byte, error) {
+func (h *SoftwareHSM) DecryptData(keyID string, ciphertext []byte) ([]byte, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -298,7 +311,7 @@ func (h *HSMServer) DecryptData(keyID string, ciphertext []byte) ([]byte, error)
 }
 
 // SignData signs data with RSA private key
-func (h *HSMServer) SignData(keyID string, data []byte) ([]byte, error) {
+func (h *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -324,7 +337,7 @@ func (h *HSMServer) SignData(keyID string, data []byte) ([]byte, error) {
 }
 
 // VerifySignature verifies RSA signature
-func (h *HSMServer) VerifySignature(keyID string, data, signature []byte) (bool, error) {
+func (h *SoftwareHSM) VerifySignature(keyID string, data, signature []byte) (bool, error) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
@@ -346,7 +359,7 @@ func (h *HSMServer) VerifySignature(keyID string, data, signature []byte) (bool,
 }
 
 // GenerateCardSignature creates a signature for card data
-func (h *HSMServer) GenerateCardSignature(cardData *CardData) (string, error) {
+func (h *SoftwareHSM) GenerateCardSignature(cardData *CardData) (string, error) {
 	// Create data to sign
 	data := fmt.Sprintf("%s:%s:%.2f:%s:%d:%s",
 		cardData.CardID,
@@ -368,7 +381,7 @@ func (h *HSMServer) GenerateCardSignature(cardData *CardData) (string, error) {
 }
 
 // VerifyCardSignature verifies card signature
-func (h *HSMServer) VerifyCardSignature(cardData *CardData, signature string) (bool, error) {
+func (h *SoftwareHSM) VerifyCardSignature(cardData *CardData, signature string) (bool, error) {
 	// Create data to verify
 	data := fmt.Sprintf("%s:%s:%.2f:%s:%d:%s",
 		cardData.CardID,
@@ -390,7 +403,7 @@ func (h *HSMServer) VerifyCardSignature(cardData *CardData, signature string) (b
 }
 
 // GenerateTransactionID creates a secure transaction ID
-func (h *HSMServer) GenerateTransactionID() string {
+func (h *SoftwareHSM) GenerateTransactionID() string {
 	uuid := uuid.New().String()
 	timestamp := time.Now().UnixNano()
 	random := make([]byte, 8)
@@ -403,7 +416,7 @@ func (h *HSMServer) GenerateTransactionID() string {
 }
 
 // SignTransaction signs a transaction
-func (h *HSMServer) SignTransaction(transaction *Transaction) (string, error) {
+func (h *SoftwareHSM) SignTransaction(transaction *Transaction) (string, error) {
 	// Create data to sign
 	data, err := json.Marshal(transaction)
 	if err != nil {
@@ -419,7 +432,7 @@ func (h *HSMServer) SignTransaction(transaction *Transaction) (string, error) {
 }
 
 // VerifyTransaction verifies transaction signature
-func (h *HSMServer) VerifyTransaction(transaction *Transaction, signature string) (bool, error) {
+func (h *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature string) (bool, error) {
 	// Create data to verify
 	data, err := json.Marshal(transaction)
 	if err != nil {
@@ -456,7 +469,7 @@ func (h *HSMServer) VerifyTransaction(transaction *Transaction, signature string
 }
 
 // DecryptPII decrypts PII data using the user_encryption key
-func (h *HSMServer) DecryptPII(encryptedData string) (string, error) {
+func (h *SoftwareHSM) DecryptPII(encryptedData string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(encryptedData)
 	if err != nil {
 		return "", fmt.Errorf("invalid base64 PII data: %w", err)
@@ -471,7 +484,7 @@ func (h *HSMServer) DecryptPII(encryptedData string) (string, error) {
 }
 
 // HashPIN hashes a PIN using Argon2
-func (h *HSMServer) HashPIN(pin string, salt []byte) (string, error) {
+func (h *SoftwareHSM) HashPIN(pin string, salt []byte) (string, error) {
 	if len(salt) == 0 {
 		salt = make([]byte, 16)
 		if _, err := rand.Read(salt); err != nil {
@@ -491,7 +504,7 @@ func (h *HSMServer) HashPIN(pin string, salt []byte) (string, error) {
 }
 
 // VerifyPIN verifies a PIN against its hash
-func (h *HSMServer) VerifyPIN(pin string, hashedPIN string) (bool, error) {
+func (h *SoftwareHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 	// Decode hashed PIN
 	decoded, err := base64.StdEncoding.DecodeString(hashedPIN)
 	if err != nil {
@@ -514,7 +527,7 @@ func (h *HSMServer) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 }
 
 // RotateKeys rotates expired or compromised keys
-func (h *HSMServer) RotateKeys() error {
+func (h *SoftwareHSM) RotateKeys() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -561,7 +574,7 @@ func (h *HSMServer) RotateKeys() error {
 }
 
 // DeleteKey removes a key from the HSM
-func (h *HSMServer) DeleteKey(keyID string) error {
+func (h *SoftwareHSM) DeleteKey(keyID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -588,7 +601,7 @@ func (h *HSMServer) DeleteKey(keyID string) error {
 }
 
 // Private helper methods
-func (h *HSMServer) loadKeys() error {
+func (h *SoftwareHSM) loadKeys() error {
 	if h.keyStorePath == "" {
 		return nil
 	}
@@ -630,7 +643,7 @@ func (h *HSMServer) loadKeys() error {
 	return nil
 }
 
-func (h *HSMServer) saveKeyToDisk(keyPair *KeyPair) error {
+func (h *SoftwareHSM) saveKeyToDisk(keyPair *KeyPair) error {
 	if h.keyStorePath == "" {
 		return nil
 	}
@@ -657,7 +670,7 @@ func (h *HSMServer) saveKeyToDisk(keyPair *KeyPair) error {
 	return os.WriteFile(keyPath, encrypted, 0600)
 }
 
-func (h *HSMServer) encryptWithMasterKey(data []byte) ([]byte, error) {
+func (h *SoftwareHSM) encryptWithMasterKey(data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(h.masterKey)
 	if err != nil {
 		return nil, err
@@ -677,7 +690,7 @@ func (h *HSMServer) encryptWithMasterKey(data []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-func (h *HSMServer) decryptWithMasterKey(data []byte) ([]byte, error) {
+func (h *SoftwareHSM) decryptWithMasterKey(data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(h.masterKey)
 	if err != nil {
 		return nil, err
@@ -697,7 +710,7 @@ func (h *HSMServer) decryptWithMasterKey(data []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-func (h *HSMServer) generateDefaultKeys() error {
+func (h *SoftwareHSM) generateDefaultKeys() error {
 	// Generate card signing key
 	if _, err := h.GenerateKeyPair("card_signing"); err != nil {
 		return err
@@ -716,7 +729,7 @@ func (h *HSMServer) generateDefaultKeys() error {
 	return nil
 }
 
-func (h *HSMServer) generateKeyPairInternal(keyID string) (*KeyPair, error) {
+func (h *SoftwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -733,7 +746,7 @@ func (h *HSMServer) generateKeyPairInternal(keyID string) (*KeyPair, error) {
 }
 
 // EncryptCardData encrypts card data to a base64 string
-func (h *HSMServer) EncryptCardData(cardData *CardData) (string, error) {
+func (h *SoftwareHSM) EncryptCardData(cardData *CardData) (string, error) {
 	// Serialize card data
 	data, err := json.Marshal(cardData)
 	if err != nil {
@@ -750,7 +763,7 @@ func (h *HSMServer) EncryptCardData(cardData *CardData) (string, error) {
 }
 
 // DecryptCardData decrypts base64 encoded card data
-func (h *HSMServer) DecryptCardData(encryptedData string) (*CardData, error) {
+func (h *SoftwareHSM) DecryptCardData(encryptedData string) (*CardData, error) {
 	// Decode base64
 	encrypted, err := base64.StdEncoding.DecodeString(encryptedData)
 	if err != nil {

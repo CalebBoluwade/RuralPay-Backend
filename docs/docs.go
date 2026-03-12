@@ -49,7 +49,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -174,7 +174,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -218,7 +218,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -250,7 +250,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "type": "string"
                         }
@@ -302,7 +302,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -348,7 +348,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -423,7 +423,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -481,7 +481,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": string(utils.InvalidRequest),
                         "schema": {
                             "type": "string"
                         }
@@ -779,7 +779,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Transaction"
+                            "$ref": "#/definitions/models.TransactionRecord"
                         }
                     }
                 ],
@@ -833,7 +833,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.Transaction"
+                            "$ref": "#/definitions/models.TransactionRecord"
                         }
                     }
                 ],
@@ -938,7 +938,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1011,7 +1011,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1086,7 +1086,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1235,7 +1235,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -1309,7 +1309,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -1478,7 +1478,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -1564,7 +1564,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -1638,7 +1638,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": string(utils.UnauthorizedError),
                         "schema": {
                             "$ref": "#/definitions/services.ErrorResponse"
                         }
@@ -1761,7 +1761,7 @@ const docTemplate = `{
             "type": "object",
             "additionalProperties": {}
         },
-        "models.Transaction": {
+        "models.TransactionRecord": {
             "type": "object",
             "properties": {
                 "amount": {
@@ -1782,7 +1782,7 @@ const docTemplate = `{
                 "fee": {
                     "type": "number"
                 },
-                "from_card_id": {
+                "debit_id": {
                     "type": "string"
                 },
                 "id": {
@@ -1815,7 +1815,7 @@ const docTemplate = `{
                 "to_bank_code": {
                     "type": "string"
                 },
-                "to_card_id": {
+                "credit_id": {
                     "type": "string"
                 },
                 "total_amount": {

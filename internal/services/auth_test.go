@@ -27,10 +27,10 @@ func TestAuthService_Register(t *testing.T) {
 	viper.Set("argon2.threads", 4)
 	viper.Set("argon2.key_length", 32)
 	viper.Set("jwt.secret_key", "test-secret")
-	viper.Set("jwt.expiry_hours", 24)
+	viper.Set("jwt.expiry_minutes", 10)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	service := NewAuthService(db, redisClient)
+	service := NewAuthService(db, redisClient, nil)
 
 	t.Run("successful registration", func(t *testing.T) {
 		req := models.RegisterRequest{
@@ -73,10 +73,10 @@ func TestAuthService_Login(t *testing.T) {
 	defer db.Close()
 
 	viper.Set("jwt.secret_key", "test-secret")
-	viper.Set("jwt.expiry_hours", 24)
+	viper.Set("jwt.expiry_minutes", 10)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	service := NewAuthService(db, redisClient)
+	service := NewAuthService(db, redisClient, nil)
 
 	t.Run("successful login", func(t *testing.T) {
 		hashedPassword, _ := hashPassword("password123")
@@ -142,11 +142,11 @@ func TestPasswordHashing(t *testing.T) {
 
 func TestGenerateJWT(t *testing.T) {
 	viper.Set("jwt.secret_key", "test-secret")
-	viper.Set("jwt.expiry_hours", 24)
+	viper.Set("jwt.expiry_minutes", 10)
 
 	merchantID := 1
 	merchantStatus := "active"
-	token, err := generateJWT(123, models.Merchant{ID: merchantID, Status: merchantStatus})
+	token, err := generateJWTWithSession(123, models.Merchant{ID: merchantID, Status: merchantStatus}, "test-session-id", "test-device-id")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
 }

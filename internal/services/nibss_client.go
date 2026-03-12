@@ -15,9 +15,25 @@ import (
 type NIBSSClient struct {
 	mandateBaseURL    string
 	settlementBaseURL string
+	bvnBaseURL        string
 	apiKey            string
 	httpClient        *http.Client
 	circuitBreaker    *gobreaker.CircuitBreaker
+	bvnBreaker        *gobreaker.CircuitBreaker
+}
+
+type BVNVerifyRequest struct {
+	BVN         string `json:"bvn"`
+	PhoneNumber string `json:"phoneNumber"`
+}
+
+type BVNVerifyResponse struct {
+	BVN          string `json:"bvn"`
+	FirstName    string `json:"firstName"`
+	LastName     string `json:"lastName"`
+	PhoneNumber  string `json:"phoneNumber"`
+	PhoneMatches bool   `json:"phoneMatches"`
+	Status       string `json:"status"`
 }
 
 type MandateRequest struct {
@@ -57,6 +73,10 @@ func NewNIBSSClient() *NIBSSClient {
 	if settlementURL == "" {
 		settlementURL = baseURL
 	}
+	bvnURL := viper.GetString("nibss.bvn_url")
+	if bvnURL == "" {
+		bvnURL = baseURL
+	}
 
 	cbSettings := gobreaker.Settings{
 		Name:        "NIBSS-Settlement",
@@ -69,15 +89,71 @@ func NewNIBSSClient() *NIBSSClient {
 		},
 	}
 
+	bvnBreakerSettings := gobreaker.Settings{
+		Name:        "NIBSS-BVN",
+		MaxRequests: 1,
+		Interval:    60 * time.Second,
+		Timeout:     30 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+			return counts.Requests >= 3 && failureRatio >= 0.6
+		},
+	}
+
 	return &NIBSSClient{
 		mandateBaseURL:    mandateURL,
 		settlementBaseURL: settlementURL,
+		bvnBaseURL:        bvnURL,
 		apiKey:            viper.GetString("nibss.api_key"),
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		circuitBreaker: gobreaker.NewCircuitBreaker(cbSettings),
+		bvnBreaker:     gobreaker.NewCircuitBreaker(bvnBreakerSettings),
 	}
+}
+
+func (c *NIBSSClient) VerifyBVN(bvn, phoneNumber string) (*BVNVerifyResponse, error) {
+	result, err := c.bvnBreaker.Execute(func() (interface{}, error) {
+		reqBody := BVNVerifyRequest{BVN: bvn, PhoneNumber: phoneNumber}
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal BVN request: %w", err)
+		}
+
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/kyc/bvn/verify", c.bvnBaseURL), bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create BVN request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("BVN verification request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS BVN API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("BVN not found")
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS BVN API returned status %d", resp.StatusCode)
+		}
+
+		var bvnResp BVNVerifyResponse
+		if err := json.NewDecoder(resp.Body).Decode(&bvnResp); err != nil {
+			return nil, fmt.Errorf("failed to decode BVN response: %w", err)
+		}
+		return &bvnResp, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.(*BVNVerifyResponse), nil
 }
 
 func (c *NIBSSClient) GetAccountMandate(bankCode, accountNumber string) (*MandateResponse, error) {

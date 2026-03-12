@@ -23,11 +23,11 @@ func NewAuditLogger() *AuditLogger {
 	return &AuditLogger{}
 }
 
-func (a *AuditLogger) LogTransfer(transactionID, fromAccount, toAccount string, amount int64, status string) {
+func (a *AuditLogger) LogTransfer(transactionId, fromAccount, toAccount string, amount int64, status string) {
 	event := AuditEvent{
 		Timestamp:     time.Now(),
 		EventType:     "TRANSFER",
-		TransactionID: transactionID,
+		TransactionID: transactionId,
 		Amount:        amount,
 		Status:        status,
 		Details: map[string]string{
@@ -38,11 +38,11 @@ func (a *AuditLogger) LogTransfer(transactionID, fromAccount, toAccount string, 
 	a.log(event)
 }
 
-func (a *AuditLogger) LogError(transactionID, accountID string, err error) {
+func (a *AuditLogger) LogError(transactionId, accountID string, err error) {
 	event := AuditEvent{
 		Timestamp:     time.Now(),
 		EventType:     "ERROR",
-		TransactionID: transactionID,
+		TransactionID: transactionId,
 		FromAccountID: accountID,
 		Status:        "FAILED",
 		Details:       map[string]string{"error": err.Error()},
@@ -50,11 +50,11 @@ func (a *AuditLogger) LogError(transactionID, accountID string, err error) {
 	a.log(event)
 }
 
-func (a *AuditLogger) LogOperation(transactionID, accountID, operation, details string) {
+func (a *AuditLogger) LogOperation(transactionId, accountID, operation, details string) {
 	event := AuditEvent{
 		Timestamp:     time.Now(),
 		EventType:     operation,
-		TransactionID: transactionID,
+		TransactionID: transactionId,
 		FromAccountID: accountID,
 		Status:        "SUCCESS",
 		Details:       map[string]string{"details": details},

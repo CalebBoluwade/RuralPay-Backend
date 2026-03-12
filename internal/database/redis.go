@@ -2,7 +2,7 @@ package database
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/spf13/viper"
@@ -17,17 +17,19 @@ func InitRedis() *redis.Client {
 
 	addr := viper.GetString("redis.host") + ":" + viper.GetString("redis.port")
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: viper.GetString("redis.password"),
-		DB:       viper.GetInt("redis.db"),
+		Addr:         addr,
+		Password:     viper.GetString("redis.password"),
+		DB:           viper.GetInt("redis.db"),
+		PoolSize:     20,
+		MinIdleConns: 5,
 	})
 
 	ctx := context.Background()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		log.Printf("Redis connection failed, continuing without Redis: %v", err)
+		slog.Error("Redis Connection Failed, Continuing without Redis: %v", err)
 		return nil
 	}
 
-	log.Println("Redis connection established")
+	slog.Info("Redis Connection Established")
 	return rdb
 }

@@ -18,7 +18,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 	t.Run("successful transfer", func(t *testing.T) {
 		fromAccountID := "account1"
 		toAccountID := "account2"
-		transactionID := "tx123"
+		transactionId := "tx123"
 		amount := int64(1000)
 
 		mock.ExpectBegin()
@@ -37,12 +37,12 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		// Create debit entry
 		mock.ExpectExec("INSERT INTO ledger_entries").
-			WithArgs(transactionID, fromAccountID, -amount, "DEBIT", 4000, sqlmock.AnyArg()).
+			WithArgs(transactionId, fromAccountID, -amount, "DEBIT", 4000, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		// Create credit entry
 		mock.ExpectExec("INSERT INTO ledger_entries").
-			WithArgs(transactionID, toAccountID, amount, "CREDIT", 3000, sqlmock.AnyArg()).
+			WithArgs(transactionId, toAccountID, amount, "CREDIT", 3000, sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		// Update from account balance
@@ -57,7 +57,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectCommit()
 
-		err := service.Transfer(fromAccountID, toAccountID, transactionID, amount)
+		err := service.Transfer(fromAccountID, toAccountID, transactionId, amount)
 		assert.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -65,7 +65,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 	t.Run("insufficient balance", func(t *testing.T) {
 		fromAccountID := "account1"
 		toAccountID := "account2"
-		transactionID := "tx123"
+		transactionId := "tx123"
 		amount := int64(6000) // More than available balance
 
 		mock.ExpectBegin()
@@ -84,7 +84,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectRollback()
 
-		err := service.Transfer(fromAccountID, toAccountID, transactionID, amount)
+		err := service.Transfer(fromAccountID, toAccountID, transactionId, amount)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "insufficient balance")
 		assert.NoError(t, mock.ExpectationsWereMet())

@@ -7,14 +7,8 @@ import (
 	"regexp"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/ruralpay/backend/internal/utils"
 )
-
-// ErrorResponse represents error response structure
-type ErrorResponse struct {
-	Error   string            `json:"errorMessage"` // Error message
-	Success bool              `json:"success"`
-	Details map[string]string `json:"details,omitempty"` // Validation details
-}
 
 // ValidationHelper provides shared validation functionality
 type ValidationHelper struct {
@@ -34,11 +28,11 @@ func (vh *ValidationHelper) ValidateStruct(s any) error {
 }
 
 // SendErrorResponse sends a JSON error response
-func SendErrorResponse(w http.ResponseWriter, message string, statusCode int, validationErr error) {
+func (vh *ValidationHelper) SendErrorResponse(w http.ResponseWriter, message string, statusCode int, validationErr error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	errorResp := ErrorResponse{Error: message, Success: false}
+	errorResp := utils.ErrorResponse{Error: message, Success: false}
 	if validationErr != nil {
 		errorResp.Details = make(map[string]string)
 		for _, err := range validationErr.(validator.ValidationErrors) {

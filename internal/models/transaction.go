@@ -13,6 +13,7 @@ const (
 	PaymentModeBankTransfer PaymentMode = "BANK_TRANSFER"
 	PaymentModeUSSD         PaymentMode = "USSD"
 	PaymentModeVoice        PaymentMode = "VOICE"
+	PaymentModeAirtimeData  PaymentMode = "AIRTIME_DATA"
 )
 
 const (
@@ -21,22 +22,33 @@ const (
 	WithdrawalPayment PaymentType = "WITHDRAWAL"
 )
 
+type USSDCodeType string
+
+const (
+	PushPayment USSDCodeType = "PUSH"
+	PullPayment USSDCodeType = "PULL"
+)
+
 // Metadata type for JSONB fields
 type Metadata map[string]any
 
 type PaymentRequest struct {
-	TransactionID string      `json:"transactionId" validate:"required"`
-	UserID        string      `json:"userId"`
-	FromAccount   string      `json:"fromAccount"`
-	ToAccount     string      `json:"toAccount"`
-	ToBankCode    string      `json:"toBankCode,omitempty"`
-	Amount        int64       `json:"amount"`
-	Currency      string      `json:"currency"`
-	Metadata      Metadata    `json:"metadata"`
-	Narration     string      `json:"narration"`
-	TxType        PaymentType `json:"txType"`
-	PaymentMode   PaymentMode `json:"paymentMode"`
-	Location      *Location   `json:"location,omitempty"`
+	TransactionID            string      `json:"transactionId" validate:"required"`
+	UserID                   string      `json:"userId"`
+	FromAccount              string      `json:"fromAccount"`
+	BeneficiaryAccountNumber string      `json:"beneficiaryAccountNumber"`
+	BeneficiaryAccountName   string      `json:"beneficiaryAccountName"`
+	BeneficiaryBankName      string      `json:"beneficiaryBankName"`
+	BeneficiaryBankCode      string      `json:"beneficiaryBankCode"`
+	Amount                   int64       `json:"amount"`
+	Currency                 string      `json:"currency"`
+	Metadata                 Metadata    `json:"metadata"`
+	Narration                string      `json:"narration"`
+	TxType                   PaymentType `json:"txType"`
+	PaymentMode              PaymentMode `json:"paymentMode"`
+	SaveBeneficiary          bool        `json:"saveBeneficiary"`
+	OneTimeCode              string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
+	Location                 *Location   `json:"location,omitempty"`
 }
 
 type PaymentResponse struct {
@@ -58,22 +70,34 @@ type Location struct {
 	Address   string  `json:"address" db:"address"`
 }
 
-type ExternalBankTransfer struct {
-	FromAccount string    `json:"fromAccount" validate:"required,max=10"`
-	ToAccount   string    `json:"toAccount" validate:"required,max=10"`
-	ToBankCode  string    `json:"toBankCode" validate:"required,max=3"`
-	Amount      float64   `json:"amount" validate:"required,gt=100,max=1000000"`
-	Currency    string    `json:"currency" validate:"required,len=3"`
-	Reference   string    `json:"reference"`
-	Narration   string    `json:"narration" validate:"max=200"`
-	Location    *Location `json:"location"`
+type Voucher struct {
+	Id                     string   `json:"id"`
+	VoucherCode            string   `json:"voucherCode"`
+	VoucherDesc            string   `json:"voucherDescription"`
+	VoucherType            string   `json:"voucherType" validate:"oneof=FIXED PERCENT"`
+	VoucherDiscountAmount  int64    `json:"VoucherDiscountAmount"`
+	VoucherAllowedServices []string `json:"voucherAllowedServices"`
 }
 
-// Transaction represents a payment transaction
-type Transaction struct {
-	ID            int    `json:"id" db:"id"`
-	TransactionID string `json:"transaction_id" db:"transaction_id"`
-	// Reference     string     `json:"reference" db:"reference"`
+type AirtimeDataRequest struct {
+	TransactionID string      `json:"transactionId"`
+	DebitAccount  string      `json:"debitAccount" validate:"required"`
+	PhoneNumber   string      `json:"beneficiaryPhoneNumber" validate:"required"`
+	Network       string      `json:"network" validate:"required"`
+	Service       string      `json:"service" validate:"required,oneof=AIRTIME DATA"`
+	DataPlan      string      `json:"dataPlanId,omitempty"`
+	Amount        int64       `json:"amount" validate:"required,gt=0"`
+	Narration     string      `json:"narration,omitempty"`
+	PaymentMode   PaymentMode `json:"paymentMode"`
+	Voucher       Voucher     `json:"voucher,omitempty"`
+	OneTimeCode   string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
+}
+
+// TransactionRecord represents a payment transaction
+type TransactionRecord struct {
+	ID            int        `json:"id" db:"id"`
+	TransactionID string     `json:"transactionId" db:"transaction_id"`
+	Reference     string     `json:"reference" db:"reference"`
 	FromAccountID string     `json:"from_account_id" db:"from_account_id"`
 	ToAccountID   string     `json:"to_account_id" db:"to_account_id"`
 	Amount        int64      `json:"amount" db:"amount"`

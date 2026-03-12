@@ -8,4 +8,4 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 UPDATE transactions t
 SET user_id = a.user_id
 FROM accounts a
-WHERE t.from_card_id = a.card_id AND t.user_id IS NULL;
+WHERE t.debit_id = a.card_id AND t.user_id IS NULL;

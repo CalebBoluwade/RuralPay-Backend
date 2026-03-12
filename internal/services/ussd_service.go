@@ -8,32 +8,26 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/big"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/ruralpay/backend/internal/config"
-)
-
-type USSDCodeType string
-
-const (
-	PushPayment USSDCodeType = "PUSH"
-	PullPayment USSDCodeType = "PULL"
+	"github.com/ruralpay/backend/internal/models"
 )
 
 type USSDCode struct {
-	Code          string       `json:"code"`
-	TransactionID string       `json:"transactionId"`
-	Type          USSDCodeType `json:"txType"`
-	UserID        string       `json:"userId"`
-	Amount        int64        `json:"amount"`
-	CreatedAt     time.Time    `json:"createdAt"`
-	ExpiresAt     time.Time    `json:"expiresAt"`
-	Expired       bool         `json:"expired"`
-	Used          bool         `json:"used"`
-	Currency      string       `json:"currency"`
+	Code          string              `json:"code"`
+	TransactionID string              `json:"transactionId"`
+	Type          models.USSDCodeType `json:"txType"`
+	UserID        string              `json:"userId"`
+	Amount        int64               `json:"amount"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	ExpiresAt     time.Time           `json:"expiresAt"`
+	Expired       bool                `json:"expired"`
+	Used          bool                `json:"used"`
+	Currency      string              `json:"currency"`
 }
 
 type USSDService struct {
@@ -51,45 +45,39 @@ func NewUSSDService(db *sql.DB, redis *redis.Client) *USSDService {
 }
 
 func (s *USSDService) GeneratePushCode(ctx context.Context, userID string, amount int64) (string, error) {
-	return s.generateCode(ctx, userID, amount, PushPayment)
+	return s.generateCode(ctx, userID, amount, models.PushPayment)
 }
 
 func (s *USSDService) GeneratePullCode(ctx context.Context, userID string, amount int64) (string, error) {
-	return s.generateCode(ctx, userID, amount, PullPayment)
+	return s.generateCode(ctx, userID, amount, models.PullPayment)
 }
 
-func (s *USSDService) generateCode(ctx context.Context, userID string, amount int64, codeType USSDCodeType) (string, error) {
-	log.Printf("[USSDService] generateCode - userID: %s, amount: %d, type: %s", userID, amount, codeType)
-
+func (s *USSDService) generateCode(ctx context.Context, userID string, amount int64, codeType models.USSDCodeType) (string, error) {
 	if err := s.checkRateLimit(ctx, userID); err != nil {
-		log.Printf("[USSDService] generateCode - Rate limit error: %v", err)
+		slog.Warn("ussd.generate_code.rate_limited", "user_id", userID, "error", err)
 		return "", err
 	}
 
 	code := s.generateSecureCode()
 	hashedCode := s.hashCode(code)
-	transactionID := s.generateTransactionID()
+	transactionId := s.generateTransactionID()
 	expiresAt := time.Now().Add(s.config.CodeTimeout)
-
-	log.Printf("[USSDService] generateCode - Generated code: %s, txID: %s, expires: %v", code, transactionID, expiresAt)
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO ussd_codes (transaction_id, code_hash, code_type, user_id, amount, expires_at, used)
 		VALUES ($1, $2, $3, $4, $5, $6, false)
-	`, transactionID, hashedCode, string(codeType), userID, amount, expiresAt)
+	`, transactionId, hashedCode, string(codeType), userID, amount, expiresAt)
 
 	if err != nil {
-		log.Printf("[USSDService] generateCode - DB insert error: %v", err)
+		slog.Error("ussd.generate_code.db_failed", "user_id", userID, "error", err)
 		return "", fmt.Errorf("failed to store code: %w", err)
 	}
 
 	s.incrementRateLimit(ctx, userID)
-
-	log.Printf("[USSDService] generateCode - Success")
 	return code, nil
 }
 
-func (s *USSDService) ValidateAndConsume(ctx context.Context, code string, expectedType USSDCodeType) (*USSDCode, error) {
+func (s *USSDService) ValidateAndConsume(ctx context.Context, code string, expectedType models.USSDCodeType) (*USSDCode, error) {
 	hashedCode := s.hashCode(code)
 
 	tx, err := s.db.BeginTx(ctx, nil)

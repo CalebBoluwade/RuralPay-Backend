@@ -2,9 +2,8 @@ package services
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type TransactionQueryService struct {
@@ -20,18 +20,20 @@ type TransactionQueryService struct {
 }
 
 type TransactionHistory struct {
-	TxID        string             `json:"transactionID"`
-	FromAccount string             `json:"fromAccount"`
-	ToAccount   string             `json:"toAccount"`
-	MerchantID  string             `json:"merchantId"`
-	Amount      int64              `json:"amount"`
-	Currency    string             `json:"currency"`
-	PaymentMode models.PaymentMode `json:"paymentMode"`
-	Fee         int64              `json:"fee"`
-	TxType      string             `json:"txType"`
-	Status      string             `json:"status"`
-	Narration   string             `json:"narration"`
-	CreatedAt   time.Time          `json:"transactionDate"`
+	TxID           string             `json:"transactionId"`
+	FromAccount    string             `json:"fromAccount"`
+	ToAccount      string             `json:"toAccount"`
+	MerchantID     string             `json:"merchantId,omitempty"`
+	Amount         int64              `json:"amount"`
+	Currency       string             `json:"currency"`
+	PaymentMode    models.PaymentMode `json:"paymentMode"`
+	Fee            int64              `json:"fee"`
+	TxType         string             `json:"txType"`
+	Status         string             `json:"status"`
+	Narration      string             `json:"narration"`
+	CreatedAt      time.Time          `json:"transactionDate"`
+	Profit         *float64           `json:"profit,omitempty"`
+	SettlementDate *time.Time         `json:"settlementDate,omitempty"`
 }
 
 func NewTransactionQueryService(db *sql.DB) *TransactionQueryService {
@@ -54,22 +56,19 @@ func NewTransactionQueryService(db *sql.DB) *TransactionQueryService {
 // @Security BearerAuth
 func (s *TransactionQueryService) GetTransaction(w http.ResponseWriter, r *http.Request) {
 	txID := chi.URLParam(r, "txId")
-	log.Printf("[TRANSACTION] Fetching transaction: %s", txID)
 
 	tx, err := s.fetchTransaction(txID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			log.Printf("[TRANSACTION] Transaction not found: %s", txID)
-			SendErrorResponse(w, "Transaction not found", http.StatusNotFound, nil)
+			utils.SendErrorResponse(w, "Transaction Not Found", http.StatusNotFound, nil)
 		} else {
-			log.Printf("[TRANSACTION] Failed to fetch transaction %s: %v", txID, err)
-			SendErrorResponse(w, "Failed to fetch transaction", http.StatusInternalServerError, nil)
+			slog.Error("transaction.get.failed", "tx_id", txID, "error", err)
+			utils.SendErrorResponse(w, "Failed To Fetch Transaction", http.StatusFailedDependency, nil)
 		}
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tx)
+	utils.SendSuccessResponse(w, "Transaction Fetched Successfully", tx, http.StatusOK)
 }
 
 // ListTransactions retrieves transactions with optional filters
@@ -88,20 +87,19 @@ func (s *TransactionQueryService) GetTransaction(w http.ResponseWriter, r *http.
 // @Security BearerAuth
 func (s *TransactionQueryService) ListTransactions(w http.ResponseWriter, r *http.Request) {
 	if txID := r.URL.Query().Get("id"); txID != "" {
-		log.Printf("[TRANSACTION] Listing transaction by ID: %s", txID)
 		tx, err := s.fetchTransaction(txID)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				log.Printf("[TRANSACTION] Transaction not found: %s", txID)
-				SendErrorResponse(w, "Transaction not found", http.StatusNotFound, nil)
+				utils.SendErrorResponse(w, "Transaction not found", http.StatusNotFound, nil)
 			} else {
-				log.Printf("[TRANSACTION] Failed to fetch transaction %s: %v", txID, err)
-				SendErrorResponse(w, "Failed to fetch transaction", http.StatusInternalServerError, nil)
+				slog.Error("transaction.list.fetch_failed", "tx_id", txID, "error", err)
+				utils.SendErrorResponse(w, "Failed to fetch transaction", http.StatusFailedDependency, nil)
 			}
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(tx)
+
+		utils.SendSuccessResponse(w, "Transaction fetched successfully", tx, http.StatusOK)
+
 		return
 	}
 
@@ -110,20 +108,15 @@ func (s *TransactionQueryService) ListTransactions(w http.ResponseWriter, r *htt
 	startDate := r.URL.Query().Get("startDate")
 	endDate := r.URL.Query().Get("endDate")
 	limit := 50
-	log.Printf("[TRANSACTION] Listing transactions - cardID: %s, status: %s, limit: %d", cardID, status, limit)
 
 	transactions, err := s.fetchTransactions(cardID, status, startDate, endDate, limit)
 	if err != nil {
-		log.Printf("[TRANSACTION] Failed to fetch transactions: %v", err)
-		SendErrorResponse(w, "Failed to fetch transactions", http.StatusInternalServerError, nil)
+		slog.Error("transaction.list.query_failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to fetch transactions", http.StatusFailedDependency, nil)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"transactions": transactions,
-		"count":        len(transactions),
-	})
+	utils.SendSuccessResponse(w, "recent transactions fetched successfully", transactions, http.StatusOK)
 }
 
 // GetRecentTransactions retrieves recent transactions
@@ -139,12 +132,7 @@ func (s *TransactionQueryService) ListTransactions(w http.ResponseWriter, r *htt
 // @Router /transactions/recent [get]
 // @Security BearerAuth
 func (s *TransactionQueryService) GetRecentTransactions(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value("userID").(string)
-	if !ok || userID == "" {
-		log.Println("[TRANSACTION] Unauthorized access to recent transactions")
-		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
-		return
-	}
+	userID, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	var req struct {
 		Limit int `validate:"omitempty,min=1,max=100"`
@@ -158,35 +146,39 @@ func (s *TransactionQueryService) GetRecentTransactions(w http.ResponseWriter, r
 	}
 
 	if err := s.validator.ValidateStruct(&req); err != nil {
-		log.Printf("[TRANSACTION] Validation failed for recent transactions: %v", err)
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		slog.Warn("transaction.recent.validation_failed", "error", err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
-	log.Printf("[TRANSACTION] Fetching recent transactions for user %s, limit: %d", userID, req.Limit)
-	transactions, err := s.fetchRecentTransactions(userID, req.Limit)
+	var transactions []TransactionHistory
+	var err error
+	if merchantID == 0 {
+		transactions, err = s.fetchRecentUserTransactions((userID), req.Limit)
+	} else {
+		transactions, err = s.fetchRecentMerchantTransactions((merchantID), req.Limit)
+	}
+
 	if err != nil {
-		SendErrorResponse(w, "Failed to fetch recent transactions", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, "Failed to fetch recent transactions", http.StatusFailedDependency, nil)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(transactions)
+	utils.SendSuccessResponse(w, "recent transactions fetched successfully", transactions, http.StatusOK)
 }
 
 func (s *TransactionQueryService) fetchTransaction(txID string) (*TransactionHistory, error) {
-	log.Printf("[TRANSACTION] Querying database for transaction: %s", txID)
 	tx := &TransactionHistory{}
 	var amountStr, feeStr string
 	err := s.db.QueryRow(`
-		SELECT transaction_id, from_card_id, to_card_id, amount::text, currency, 
+		SELECT transaction_id, debit_id, credit_id, amount::text, currency, 
 		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee::text, status, COALESCE(narration, ''), created_at
 		FROM transactions
 		WHERE transaction_id = $1
 	`, txID).Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt)
 
 	if err != nil {
-		log.Printf("[TRANSACTION] Database error for transaction %s: %v", txID, err)
+		slog.Error("transaction.fetch.db_error", "tx_id", txID, "error", err)
 		return nil, err
 	}
 
@@ -194,7 +186,6 @@ func (s *TransactionQueryService) fetchTransaction(txID string) (*TransactionHis
 	tx.Amount = int64(amount)
 	fee, _ := strconv.ParseFloat(feeStr, 64)
 	tx.Fee = int64(fee)
-	log.Printf("[TRANSACTION] Successfully fetched transaction %s", txID)
 	return tx, nil
 }
 
@@ -204,13 +195,13 @@ func (s *TransactionQueryService) fetchTransactions(cardID, status, startDate, e
 	argIndex := 1
 
 	baseQuery := `
-		SELECT transaction_id, from_card_id, to_card_id, amount, currency, 
+		SELECT transaction_id, debit_id, credit_id, amount, currency, 
 		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee, status, COALESCE(narration, ''), created_at
 		FROM transactions
 	`
 
 	if cardID != "" {
-		conditions = append(conditions, fmt.Sprintf("(from_card_id = $%d OR to_card_id = $%d)", argIndex, argIndex))
+		conditions = append(conditions, fmt.Sprintf("(debit_id = $%d OR credit_id = $%d)", argIndex, argIndex))
 		args = append(args, cardID)
 		argIndex++
 	}
@@ -246,10 +237,9 @@ func (s *TransactionQueryService) fetchTransactions(cardID, status, startDate, e
 	query += fmt.Sprintf(" LIMIT $%d", argIndex)
 	args = append(args, limit)
 
-	log.Printf("[TRANSACTION] Executing query with %d conditions", len(conditions))
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		log.Printf("[TRANSACTION] Query failed: %v", err)
+		slog.Error("transaction.fetch_list.query_failed", "error", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -259,19 +249,18 @@ func (s *TransactionQueryService) fetchTransactions(cardID, status, startDate, e
 		tx := TransactionHistory{}
 		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &tx.Amount, &tx.Currency, &tx.TxType, &tx.PaymentMode, &tx.Fee, &tx.Status, &tx.Narration, &tx.CreatedAt)
 		if err != nil {
-			log.Printf("[TRANSACTION] Failed to scan row: %v", err)
+			slog.Error("transaction.fetch_list.scan_failed", "error", err)
 			return nil, err
 		}
 		transactions = append(transactions, tx)
 	}
 
-	log.Printf("[TRANSACTION] Fetched %d transactions", len(transactions))
 	return transactions, nil
 }
 
-func (s *TransactionQueryService) fetchRecentTransactions(userID string, limit int) ([]TransactionHistory, error) {
+func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, limit int) ([]TransactionHistory, error) {
 	query := `
-		SELECT transaction_id, COALESCE(from_card_id, '') as from_card_id, COALESCE(to_card_id, '') as to_card_id, amount::text, currency, 
+		SELECT transaction_id, COALESCE(debit_id, '') as debit_id, COALESCE(credit_id, '') as credit_id, amount::text, currency, 
 		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee::text, status, COALESCE(narration, ''), created_at
 		FROM transactions
 		WHERE user_id = $1::integer
@@ -281,7 +270,7 @@ func (s *TransactionQueryService) fetchRecentTransactions(userID string, limit i
 
 	rows, err := s.db.Query(query, userID, limit)
 	if err != nil {
-		log.Printf("[TRANSACTION] Failed to query recent transactions for user %s: %v", userID, err)
+		slog.Error("transaction.fetch_user_recent.query_failed", "user_id", userID, "error", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -292,7 +281,7 @@ func (s *TransactionQueryService) fetchRecentTransactions(userID string, limit i
 		var amountStr, feeStr string
 		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt)
 		if err != nil {
-			log.Printf("[TRANSACTION] Failed to scan row for user %s: %v", userID, err)
+			slog.Error("transaction.fetch_user_recent.scan_failed", "user_id", userID, "error", err)
 			return nil, err
 		}
 		amount, _ := strconv.ParseFloat(amountStr, 64)
@@ -302,6 +291,69 @@ func (s *TransactionQueryService) fetchRecentTransactions(userID string, limit i
 		transactions = append(transactions, tx)
 	}
 
-	log.Printf("[TRANSACTION] Fetched %d recent transactions for user %s", len(transactions), userID)
+	return transactions, nil
+}
+
+func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int, limit int) ([]TransactionHistory, error) {
+	query := `
+		SELECT
+			t.transaction_id,
+			COALESCE(t.debit_id, '') AS debit_id,
+			COALESCE(t.credit_id, '') AS credit_id,
+			t.amount::text,
+			t.currency,
+			COALESCE(t.type, 'DEBIT') AS type,
+			COALESCE(t.payment_mode, 'CARD') AS payment_mode,
+			t.fee::text,
+			t.status,
+			COALESCE(t.narration, ''),
+			t.created_at,
+			(t.amount * m.commission_rate / 100)::text AS profit,
+			CASE m.settlement_cycle
+				WHEN 'DAILY'   THEN t.created_at + INTERVAL '1 day'
+				WHEN 'WEEKLY'  THEN t.created_at + INTERVAL '7 days'
+				WHEN 'MONTHLY' THEN t.created_at + INTERVAL '1 month'
+			END AS settlement_date
+		FROM transactions t
+		JOIN merchants m ON m.account_id = t.credit_id
+		WHERE m.id = $1::integer
+		ORDER BY t.created_at DESC
+		LIMIT $2
+	`
+
+	rows, err := s.db.Query(query, merchantID, limit)
+	if err != nil {
+		slog.Error("transaction.fetch_merchant_recent.query_failed", "merchant_id", merchantID, "error", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	transactions := []TransactionHistory{}
+	for rows.Next() {
+		tx := TransactionHistory{}
+		var amountStr, feeStr, profitStr string
+		var settlementDate sql.NullTime
+		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt, &profitStr, &settlementDate)
+		if err != nil {
+			slog.Error("transaction.fetch_merchant_recent.scan_failed", "merchant_id", merchantID, "error", err)
+			return nil, err
+		}
+		amount, _ := strconv.ParseFloat(amountStr, 64)
+		tx.Amount = int64(amount)
+		fee, _ := strconv.ParseFloat(feeStr, 64)
+		tx.Fee = int64(fee)
+		if profit, err := strconv.ParseFloat(profitStr, 64); err == nil {
+			tx.Profit = &profit
+		}
+		if settlementDate.Valid {
+			tx.SettlementDate = &settlementDate.Time
+		}
+		transactions = append(transactions, tx)
+	}
+
+	if err := rows.Err(); err != nil {
+		slog.Error("transaction.fetch_merchant_recent.rows_error", "merchant_id", merchantID, "error", err)
+		return nil, err
+	}
 	return transactions, nil
 }

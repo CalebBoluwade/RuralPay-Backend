@@ -3,11 +3,12 @@ package services
 import (
 	"database/sql"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type MerchantService struct {
@@ -54,18 +55,18 @@ func NewMerchantService(db *sql.DB) *MerchantService {
 func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID")
 	if userID == nil {
-		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
+		utils.SendErrorResponse(w, utils.UnauthorizedError, http.StatusUnauthorized, nil)
 		return
 	}
 
 	var req OnboardMerchantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid Request", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		SendErrorResponse(w, "Validation Failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
@@ -81,59 +82,96 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 		&merchant.CreatedAt, &merchant.UpdatedAt)
 
 	if err == sql.ErrNoRows {
-		SendErrorResponse(w, "Merchant Already Exists for this User", http.StatusConflict, nil)
+		utils.SendErrorResponse(w, "Merchant Already Exists for this User", http.StatusConflict, nil)
 		return
 	}
 	if err != nil {
-		log.Printf("[MERCHANT] Failed to Create Merchant: %v", err)
-		SendErrorResponse(w, "Failed to Create Merchant", http.StatusInternalServerError, err)
+		slog.Error("merchant.onboard.failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Create Merchant", http.StatusFailedDependency, err)
 		return
 	}
 
-	log.Printf("[MERCHANT] Merchant Created Successfully - ID: %d, User: %v", merchant.ID, userID)
+	slog.Info("merchant.onboard.success", "merchant_id", merchant.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(merchant)
 }
 
+type TransactionStatusBreakdown struct {
+	Status          string `json:"status"`
+	TransactionCount int64  `json:"transactionCount"`
+	TotalAmount     int64  `json:"totalAmount"`
+}
+
+type MerchantStats struct {
+	TodayCompletedCount  int64                        `json:"todayCompletedCount"`
+	TodayCompletedVolume int64                        `json:"todayCompletedVolume"`
+	TodayProfit          float64                      `json:"todayProfit"`
+	TotalCompletedVolume int64                        `json:"totalCompletedVolume"`
+	TotalProfit          float64                      `json:"totalProfit"`
+	TotalCompletedCount  int64                        `json:"totalCompletedCount"`
+	ByStatus             []TransactionStatusBreakdown `json:"byStatus"`
+}
+
 // GetMerchant godoc
 // @Summary Get merchant details
-// @Description Retrieve merchant Data for the authenticated user
+// @Description Retrieve merchant data and stats for the authenticated user
 // @Tags Merchants
 // @Produce json
-// @Success 200 {object} models.Merchant
+// @Success 200 {object} MerchantStats
 // @Failure 401 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
 // @Router /merchants [get]
 func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID")
-	if userID == nil {
-		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
+	_, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+
+	rows, err := s.db.Query(`
+		WITH base AS (
+			SELECT m.commission_rate, t.status, t.amount, t.created_at
+			FROM merchants m
+			LEFT JOIN transactions t ON t.credit_id = m.account_id
+			WHERE m.id = $1
+		)
+		SELECT
+			status                                                                                        AS transaction_status,
+			COUNT(*)                                                                                      AS transactions_with_status,
+			COALESCE(SUM(amount), 0)                                                                      AS amount_for_status,
+			MAX(commission_rate)                                                                          AS merchant_commission_rate,
+			COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE AND status = 'COMPLETED')                   AS completed_count_today,
+			COALESCE(SUM(amount) FILTER (WHERE created_at >= CURRENT_DATE AND status = 'COMPLETED'), 0)   AS completed_volume_today,
+			COUNT(*) FILTER (WHERE status = 'COMPLETED')                                                  AS completed_count_all_time,
+			COALESCE(SUM(amount) FILTER (WHERE status = 'COMPLETED'), 0)                                  AS completed_volume_all_time
+		FROM base
+		GROUP BY status`, merchantID)
+	if err == sql.ErrNoRows || rows == nil {
+		utils.SendErrorResponse(w, "Merchant Not Found", http.StatusNotFound, nil)
 		return
 	}
-
-	var merchant models.Merchant
-	err := s.db.QueryRow(`
-		SELECT id, user_id, business_name, business_type, tax_id, status, commission_rate, settlement_cycle, created_at, updated_at
-		FROM merchants WHERE user_id = $1`, userID).Scan(
-		&merchant.ID, &merchant.UserID, &merchant.BusinessName, &merchant.BusinessType, &merchant.TaxID,
-		&merchant.Status, &merchant.CommissionRate, &merchant.SettlementCycle,
-		&merchant.CreatedAt, &merchant.UpdatedAt)
-
-	if err == sql.ErrNoRows {
-		SendErrorResponse(w, "Merchant Not Found", http.StatusNotFound, nil)
-		return
-	}
-
 	if err != nil {
-		log.Printf("[MERCHANT] Failed to get merchant: %v", err)
-		SendErrorResponse(w, "Internal server error", http.StatusInternalServerError, err)
+		slog.Error("merchant.stats.query_failed", "error", err)
+		utils.SendErrorResponse(w, "Internal server error", http.StatusInternalServerError, err)
 		return
 	}
+	defer rows.Close()
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(merchant)
+	var stats MerchantStats
+	var commissionRate float64
+	for rows.Next() {
+		var ss TransactionStatusBreakdown
+		rows.Scan(&ss.Status, &ss.TransactionCount, &ss.TotalAmount,
+			&commissionRate,
+			&stats.TodayCompletedCount, &stats.TodayCompletedVolume,
+			&stats.TotalCompletedCount, &stats.TotalCompletedVolume)
+		if ss.Status != "" {
+			stats.ByStatus = append(stats.ByStatus, ss)
+		}
+	}
+
+	stats.TodayProfit = float64(stats.TodayCompletedVolume) * (commissionRate / 100)
+	stats.TotalProfit = float64(stats.TotalCompletedVolume) * (commissionRate / 100)
+
+	utils.SendSuccessResponse(w, "Fetched Merchant Stats Successfully", stats, http.StatusOK)
 }
 
 // UpdateMerchant godoc
@@ -153,18 +191,18 @@ func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request
 func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID")
 	if userID == nil {
-		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
+		utils.SendErrorResponse(w, utils.UnauthorizedError, http.StatusUnauthorized, nil)
 		return
 	}
 
 	var req UpdateMerchantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
@@ -179,14 +217,14 @@ func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request)
 		req.BusinessName, req.BusinessType, req.CommissionRate, req.SettlementCycle, userID)
 
 	if err != nil {
-		log.Printf("[MERCHANT] Failed to update merchant: %v", err)
-		SendErrorResponse(w, "Failed to update merchant", http.StatusInternalServerError, err)
+		slog.Error("merchant.update.failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to update merchant", http.StatusFailedDependency, err)
 		return
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		SendErrorResponse(w, "Merchant not found", http.StatusNotFound, nil)
+		utils.SendErrorResponse(w, "Merchant not found", http.StatusNotFound, nil)
 		return
 	}
 
@@ -213,25 +251,25 @@ func (s *MerchantService) UpdateMerchantStatus(w http.ResponseWriter, r *http.Re
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := s.validator.Struct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
 	result, err := s.db.Exec("UPDATE merchants SET status = $1, updated_at = NOW() WHERE id = $2", req.Status, req.MerchantID)
 	if err != nil {
-		log.Printf("[MERCHANT] Failed to update merchant status: %v", err)
-		SendErrorResponse(w, "Failed to update merchant status", http.StatusInternalServerError, err)
+		slog.Error("merchant.update_status.failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to update merchant status", http.StatusFailedDependency, err)
 		return
 	}
 
 	rows, _ := result.RowsAffected()
 	if rows == 0 {
-		SendErrorResponse(w, "Merchant not found", http.StatusNotFound, nil)
+		utils.SendErrorResponse(w, "Merchant not found", http.StatusNotFound, nil)
 		return
 	}
 
@@ -263,8 +301,8 @@ func (s *MerchantService) ListMerchants(w http.ResponseWriter, r *http.Request) 
 
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		log.Printf("[MERCHANT] Failed to list merchants: %v", err)
-		SendErrorResponse(w, "Internal server error", http.StatusInternalServerError, err)
+		slog.Error("merchant.list.query_failed", "error", err)
+		utils.SendErrorResponse(w, "Internal server error", http.StatusFailedDependency, err)
 		return
 	}
 	defer rows.Close()
@@ -275,7 +313,7 @@ func (s *MerchantService) ListMerchants(w http.ResponseWriter, r *http.Request) 
 		if err := rows.Scan(&m.ID, &m.UserID, &m.BusinessName, &m.BusinessType, &m.TaxID,
 			&m.Status, &m.CommissionRate, &m.SettlementCycle,
 			&m.CreatedAt, &m.UpdatedAt); err != nil {
-			log.Printf("[MERCHANT] Failed to scan merchant: %v", err)
+			slog.Error("merchant.list.scan_failed", "error", err)
 			continue
 		}
 		merchants = append(merchants, m)

@@ -13,6 +13,7 @@ import (
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/providers"
 	"github.com/ruralpay/backend/internal/services"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type PaymentHandler struct {
@@ -28,6 +29,7 @@ func NewPaymentHandler(db *sql.DB, redis *redis.Client, hsm hsm.HSMInterface) *P
 			models.PaymentModeBankTransfer: providers.NewBankTransferPaymentProvider(db, redis, hsm),
 			models.PaymentModeUSSD:         providers.NewUSSDPaymentProvider(db, redis, hsm),
 			models.PaymentModeVoice:        providers.NewVoicePaymentProvider(db, redis, hsm),
+			models.PaymentModeAirtimeData:  providers.NewAirtimeDataProvider(db, redis, hsm),
 		},
 		validator: services.NewValidationHelper(),
 	}
@@ -53,30 +55,30 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("[PaymentHandler] Error reading request body: %v", err)
-		services.SendErrorResponse(w, "Unable to Process this request at this time", http.StatusBadRequest, nil)
+		log.Printf("[PaymentHandler] Error Reading Request Body: %v", err)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
-	log.Printf("[PaymentHandler] Request body received: %s", string(body))
+	log.Printf("[PaymentHandler] Request Body Received: %s", string(body))
 
 	var req models.PaymentRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		log.Printf("[PaymentHandler] Error unmarshaling request body: %v, body: %s", err, string(body))
-		services.SendErrorResponse(w, "Invalid request body", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 	log.Printf("[PaymentHandler] [Payment Mode]=%s", req.PaymentMode)
 
 	if req.PaymentMode == "" {
 		log.Printf("[PaymentHandler] Missing Payment Mode in request, body: %s", string(body))
-		services.SendErrorResponse(w, "Payment Mode is required", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidPaymentMode, http.StatusBadRequest, nil)
 		return
 	}
 
 	provider, exists := h.providerMap[req.PaymentMode]
 	if !exists {
 		log.Printf("[PaymentHandler] Invalid Payment Mode: %s", req.PaymentMode)
-		services.SendErrorResponse(w, "Invalid Payment Mode", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidPaymentMode, http.StatusBadRequest, nil)
 		return
 	}
 

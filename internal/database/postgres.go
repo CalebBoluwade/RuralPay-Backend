@@ -3,7 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -31,7 +31,7 @@ func GetConfig() *DBConfig {
 	viper.SetDefault("database.port", "5432")
 	viper.SetDefault("database.user", "postgres")
 	viper.SetDefault("database.password", "password")
-	viper.SetDefault("database.name", "nfc_payments")
+	viper.SetDefault("database.name", "ruralpay")
 	viper.SetDefault("database.ssl_mode", "disable")
 	viper.SetDefault("database.max_open_conns", 25)
 	viper.SetDefault("database.max_idle_conns", 5)
@@ -74,8 +74,9 @@ func InitDB() (*sql.DB, error) {
 	db.SetMaxOpenConns(config.MaxOpenConns)
 	db.SetMaxIdleConns(config.MaxIdleConns)
 	db.SetConnMaxLifetime(config.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(2 * time.Minute)
 
-	log.Println("Database connection established")
+	slog.Info("Database connection established")
 	return db, nil
 }
 
@@ -96,7 +97,7 @@ func CloseDB() error {
 func InitDatabase() *sql.DB {
 	db, err := InitDB()
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		slog.Error("Failed to initialize database: %v", "error", err)
 	}
 	return db
 }

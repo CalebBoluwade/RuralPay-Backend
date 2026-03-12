@@ -3,8 +3,8 @@ CREATE TABLE IF NOT EXISTS transactions (
     id SERIAL PRIMARY KEY,
     transaction_id VARCHAR(255) UNIQUE NOT NULL,
     reference_id VARCHAR(255),
-    from_card_id VARCHAR(255) REFERENCES cards(card_id),
-    to_card_id VARCHAR(255) REFERENCES cards(card_id),
+    debit_id VARCHAR(255) REFERENCES cards(card_id),
+    credit_id VARCHAR(255) REFERENCES cards(card_id),
     amount DECIMAL(15,2) NOT NULL,
     fee DECIMAL(15,2) NOT NULL DEFAULT 0.00,
     total_amount DECIMAL(15,2) NOT NULL,
@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS transactions (
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_transactions_transaction_id ON transactions(transaction_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_from_card_id ON transactions(from_card_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_to_card_id ON transactions(to_card_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_debit_id ON transactions(debit_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_credit_id ON transactions(credit_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type);
 CREATE INDEX IF NOT EXISTS idx_transactions_sync_status ON transactions(sync_status);

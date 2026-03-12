@@ -2,10 +2,11 @@ package services
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type Bank struct {
@@ -145,9 +146,7 @@ func (bs *BankService) GetAllBanks(w http.ResponseWriter, r *http.Request) {
 		banks[i].UptimePrediction = bs.PredictUptime(banks[i].Code)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	json.NewEncoder(w).Encode(banks)
+	utils.SendSuccessResponse(w, "Banks Fetched Successfully", banks, http.StatusOK)
 }
 
 func (bs *BankService) LoadLogo(code string) string {

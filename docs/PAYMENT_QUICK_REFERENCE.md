@@ -146,7 +146,7 @@ Authorization: Bearer <your_jwt_token>
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| "Unauthorized" | Missing/invalid JWT token | Include valid token in Authorization header |
+| string(utils.UnauthorizedError) | Missing/invalid JWT token | Include valid token in Authorization header |
 | "Account does not belong to user" | fromAccount not owned by user | Use correct account ID |
 | "Insufficient balance" | Not enough funds | Top up account |
 | "Invalid QR code" | QR code expired/invalid | Generate new QR code |

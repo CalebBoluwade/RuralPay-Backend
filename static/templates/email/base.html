@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{.Title}}</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0; }
+    .container { max-width:600px; margin:40px auto; background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.08); }
+    .header { background:#000; padding:24px 32px; }
+    .header h1 { color:#a3e635; margin:0; font-size:20px; }
+    .body { padding:32px; color:#111; }
+    .amount-box { background:#f0fdf4; border-left:4px solid #a3e635; padding:16px 20px; border-radius:4px; margin:20px 0; }
+    .amount-box .amount { font-size:28px; font-weight:700; color:#4d7c0f; }
+    .detail-row { display:flex; justify-content:space-between; width:100%; padding:8px 0; border-bottom:1px solid #f0f0f0; font-size:14px; }
+    .detail-row:last-child { border-bottom:none; }
+    .label { color:#6b7280; margin-right: 6px; }
+    .value { font-weight:600; color:#111; }
+    .status-badge { display:inline-block; padding:4px 12px; border-radius:20px; font-size:12px; font-weight:700; text-transform:uppercase; }
+    .status-received { background:#ecfccb; color:#3f6212; }
+    .status-sent     { background:#f0fdf4; color:#166534; }
+    .status-failed   { background:#fee2e2; color:#991b1b; }
+    .status-pending  { background:#fef9c3; color:#854d0e; }
+    .footer { background:#f9fafb; padding:20px 32px; text-align:center; font-size:12px; color:#4b5563; border-top:1px solid #e5e7eb; }
+    .feedback { text-align:center; margin:24px 0 8px; }
+    .feedback p { font-size:13px; color:#4b5563; margin:0 0 10px; }
+    .feedback a { display:inline-block; padding:8px 20px; border-radius:20px; font-size:13px; font-weight:600; text-decoration:none; margin:0 4px; }
+    .feedback-yes { background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
+    .feedback-no  { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header" style="display:flex;align-items:center;gap:12px;">
+      <img src="{{.BaseURL}}/static/bank-logos/ruralpay-logo.png" alt="RuralPay" style="height:36px;" />
+      <h1 style="color:#a3e635;margin:0;font-size:20px;">RuralPay</h1>
+    </div>
+    <div class="body">
+      {{template "content" .}}
+    </div>
+    {{if .FeedbackURL}}
+    <div class="feedback">
+      <p>Was this transaction as expected?</p>
+      <a href="{{.FeedbackURL}}&rating=yes" class="feedback-yes">&#128077; Yes</a>
+      <a href="{{.FeedbackURL}}&rating=no" class="feedback-no">&#128078; No</a>
+    </div>
+    {{end}}
+    <div class="footer">
+      &copy; RuralPay. This is an Automated Notification — Please do not reply.
+    </div>
+  </div>
+</body>
+</html>

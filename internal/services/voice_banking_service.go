@@ -14,6 +14,7 @@ import (
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type VoiceBankingService struct {
@@ -46,7 +47,7 @@ func NewVoiceBankingService() *VoiceBankingService {
 func (s *VoiceBankingService) TranscribeAudio(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value("userID").(string)
 	if !ok || userID == "" {
-		SendErrorResponse(w, "Unauthorized", http.StatusUnauthorized, nil)
+		utils.SendErrorResponse(w, utils.UnauthorizedError, http.StatusUnauthorized, nil)
 		return
 	}
 
@@ -58,17 +59,17 @@ func (s *VoiceBankingService) TranscribeAudio(w http.ResponseWriter, r *http.Req
 
 	var req TranscribeRequest
 	if err := dec.Decode(&req); err != nil {
-		SendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if req.Audio == "" {
-		SendErrorResponse(w, "Audio is required", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Audio is required", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -88,7 +89,7 @@ func (s *VoiceBankingService) TranscribeAudio(w http.ResponseWriter, r *http.Req
 
 	if err != nil {
 		log.Printf("[VOICE] Transcription failed for user %s: %v", userID, err)
-		SendErrorResponse(w, "Failed to transcribe audio", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, "Failed to transcribe audio", http.StatusFailedDependency, nil)
 		return
 	}
 

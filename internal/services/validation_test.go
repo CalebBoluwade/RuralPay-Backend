@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/ruralpay/backend/internal/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -66,13 +67,13 @@ func TestValidationHelper_ValidateStruct(t *testing.T) {
 func TestSendErrorResponse(t *testing.T) {
 	t.Run("error response without validation errors", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		
-		SendErrorResponse(w, "Something went wrong", http.StatusInternalServerError, nil)
 
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		utils.SendErrorResponse(w, "Something went wrong", http.StatusFailedDependency, nil)
+
+		assert.Equal(t, http.StatusFailedDependency, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-		var response ErrorResponse
+		var response utils.ErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, "Something went wrong", response.Error)
@@ -91,15 +92,15 @@ func TestSendErrorResponse(t *testing.T) {
 		assert.Error(t, validationErr)
 
 		w := httptest.NewRecorder()
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, validationErr)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, validationErr)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-		var response ErrorResponse
+		var response utils.ErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
-		assert.Equal(t, "Validation failed", response.Error)
+		assert.Equal(t, string(utils.ValidationError), response.Error)
 		assert.NotNil(t, response.Details)
 		assert.Contains(t, response.Details, "Name")
 		assert.Contains(t, response.Details, "Email")
@@ -108,25 +109,25 @@ func TestSendErrorResponse(t *testing.T) {
 
 	t.Run("bad request error", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		
-		SendErrorResponse(w, "Invalid request", http.StatusBadRequest, nil)
+
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
-		
-		var response ErrorResponse
+
+		var response utils.ErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
-		assert.Equal(t, "Invalid request", response.Error)
+		assert.Equal(t, utils.InvalidRequestError, response.Error)
 	})
 
 	t.Run("unauthorized error", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		
-		SendErrorResponse(w, "Unauthorized access", http.StatusUnauthorized, nil)
+
+		utils.SendErrorResponse(w, "Unauthorized access", http.StatusUnauthorized, nil)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
-		
-		var response ErrorResponse
+
+		var response utils.ErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, "Unauthorized access", response.Error)
@@ -141,7 +142,7 @@ func TestNewValidationHelper(t *testing.T) {
 
 func TestErrorResponse_Structure(t *testing.T) {
 	t.Run("error response structure", func(t *testing.T) {
-		errorResp := ErrorResponse{
+		errorResp := utils.ErrorResponse{
 			Error: "Test error",
 			Details: map[string]string{
 				"field1": "validation error 1",
@@ -152,7 +153,7 @@ func TestErrorResponse_Structure(t *testing.T) {
 		jsonData, err := json.Marshal(errorResp)
 		assert.NoError(t, err)
 
-		var unmarshaled ErrorResponse
+		var unmarshaled utils.ErrorResponse
 		err = json.Unmarshal(jsonData, &unmarshaled)
 		assert.NoError(t, err)
 		assert.Equal(t, "Test error", unmarshaled.Error)
@@ -161,14 +162,14 @@ func TestErrorResponse_Structure(t *testing.T) {
 	})
 
 	t.Run("error response without details", func(t *testing.T) {
-		errorResp := ErrorResponse{
+		errorResp := utils.ErrorResponse{
 			Error: "Simple error",
 		}
 
 		jsonData, err := json.Marshal(errorResp)
 		assert.NoError(t, err)
 
-		var unmarshaled ErrorResponse
+		var unmarshaled utils.ErrorResponse
 		err = json.Unmarshal(jsonData, &unmarshaled)
 		assert.NoError(t, err)
 		assert.Equal(t, "Simple error", unmarshaled.Error)

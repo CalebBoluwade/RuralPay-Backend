@@ -14,7 +14,7 @@ func main() {
 	iso20022Service := services.NewISO20022Service()
 
 	// Example transaction
-	tx := &models.Transaction{
+	tx := &models.TransactionRecord{
 		TransactionID: "TXN123456789",
 		// ReferenceID:   "REF987654321",
 		FromAccountID: "CARD001",

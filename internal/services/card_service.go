@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type CardService struct {
@@ -60,17 +61,17 @@ func (cps *CardService) ProvisionCard(w http.ResponseWriter, r *http.Request) {
 
 	var req ProvisionRequest
 	if err := dec.Decode(&req); err != nil {
-		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := cps.validator.ValidateStruct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
@@ -97,17 +98,17 @@ func (cps *CardService) ActivateCard(w http.ResponseWriter, r *http.Request) {
 
 	var req ActivationRequest
 	if err := dec.Decode(&req); err != nil {
-		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		SendErrorResponse(w, "Request body must only contain a single JSON object", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := cps.validator.ValidateStruct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
@@ -157,19 +158,19 @@ func (cps *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
 func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	bin := r.URL.Query().Get("bin")
 	if bin == "" {
-		SendErrorResponse(w, "BIN is required", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "BIN is required", http.StatusBadRequest, nil)
 		return
 	}
 
 	if len(bin) < 6 {
-		SendErrorResponse(w, "Invalid BIN length", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Invalid BIN length", http.StatusBadRequest, nil)
 		return
 	}
 
 	// Sanitize BIN
 	bin = strings.ReplaceAll(bin, " ", "")
 	if len(bin) < 6 {
-		SendErrorResponse(w, "Invalid BIN length", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Invalid BIN length", http.StatusBadRequest, nil)
 		return
 	}
 
@@ -215,7 +216,7 @@ func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	} else if strings.HasPrefix(bin, "506") || strings.HasPrefix(bin, "65") {
 		fallback.Scheme = "Verve"
 	} else {
-		SendErrorResponse(w, "BIN information not found", http.StatusNotFound, nil)
+		utils.SendErrorResponse(w, "BIN information not found", http.StatusNotFound, nil)
 		return
 	}
 

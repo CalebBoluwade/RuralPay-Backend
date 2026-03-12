@@ -35,7 +35,7 @@ type CardInfo struct {
 }
 
 type CardPaymentRequest struct {
-	TransactionID   string      `json:"transactionID"`
+	TransactionID   string      `json:"transactionId"`
 	TransactionDate int64       `json:"transactionDate"`
 	MerchantID      string      `json:"merchantId" validate:"required,gt=0"`
 	Amount          int64       `json:"amount" validate:"required,gt=0"`
@@ -129,12 +129,12 @@ type ReversalResponse struct {
 
 // CardSyncRequest represents card sync data from mobile
 type CardSyncRequest struct {
-	CardID       string        `json:"card_id" binding:"required"`
-	Balance      float64       `json:"balance" binding:"required"`
-	TxCounter    int           `json:"tx_counter" binding:"required"`
-	LastSyncAt   time.Time     `json:"last_sync_at"`
-	Transactions []Transaction `json:"transactions"`
-	Signature    string        `json:"signature" binding:"required"`
+	CardID       string              `json:"card_id" binding:"required"`
+	Balance      float64             `json:"balance" binding:"required"`
+	TxCounter    int                 `json:"tx_counter" binding:"required"`
+	LastSyncAt   time.Time           `json:"last_sync_at"`
+	Transactions []TransactionRecord `json:"transactions"`
+	Signature    string              `json:"signature" binding:"required"`
 }
 
 // CardSyncResponse represents server response to card sync
@@ -159,9 +159,9 @@ type TransactionUpdate struct {
 
 // TransactionConflict represents conflicting transactions
 type TransactionConflict struct {
-	LocalTransaction  Transaction `json:"local_transaction"`
-	ServerTransaction Transaction `json:"server_transaction"`
-	Resolution        string      `json:"resolution"` // "keep_local", "use_server", "manual"
+	LocalTransaction  TransactionRecord `json:"local_transaction"`
+	ServerTransaction TransactionRecord `json:"server_transaction"`
+	Resolution        string            `json:"resolution"` // "keep_local", "use_server", "manual"
 }
 
 // CardIssueRequest represents new card issuance

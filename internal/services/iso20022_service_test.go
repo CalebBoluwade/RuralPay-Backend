@@ -15,7 +15,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("successful conversion", func(t *testing.T) {
-		tx := models.Transaction{
+		tx := models.TransactionRecord{
 			TransactionID: "tx123",
 
 			FromAccountID: "card123",
@@ -49,7 +49,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 	})
 
 	t.Run("validation failure", func(t *testing.T) {
-		tx := models.Transaction{
+		tx := models.TransactionRecord{
 			// Missing required fields to trigger validation
 			Amount:   10050,
 			Currency: "NGN",
@@ -70,7 +70,7 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("successful settlement", func(t *testing.T) {
-		tx := models.Transaction{
+		tx := models.TransactionRecord{
 			TransactionID: "tx123",
 
 			FromAccountID: "card123",
@@ -107,7 +107,7 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("create valid pacs008", func(t *testing.T) {
-		tx := &models.Transaction{
+		tx := &models.TransactionRecord{
 			TransactionID: "tx123",
 
 			FromAccountID: "card123",
@@ -133,7 +133,7 @@ func TestISO20022Service_CreatePacs002(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("create valid pacs002", func(t *testing.T) {
-		tx := &models.Transaction{
+		tx := &models.TransactionRecord{
 			TransactionID: "tx123",
 		}
 
@@ -152,7 +152,7 @@ func TestISO20022Service_ConvertToXML(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("convert to XML", func(t *testing.T) {
-		tx := &models.Transaction{
+		tx := &models.TransactionRecord{
 			TransactionID: "tx123",
 
 			Amount:   10050,
@@ -185,7 +185,7 @@ func TestISO20022Service_ConvertTransaction(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("convert transaction", func(t *testing.T) {
-		tx := &models.Transaction{
+		tx := &models.TransactionRecord{
 			TransactionID: "tx123",
 			Amount:        10050,
 			Currency:      "NGN",
@@ -203,7 +203,7 @@ func TestISO20022Service_SendToSettlement(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("send to settlement", func(t *testing.T) {
-		tx := &models.Transaction{
+		tx := &models.TransactionRecord{
 			TransactionID: "tx123",
 			Amount:        10050,
 			Currency:      "NGN",

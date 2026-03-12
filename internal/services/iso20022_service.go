@@ -11,6 +11,7 @@ import (
 	"github.com/moov-io/iso20022/pkg/common"
 	"github.com/moov-io/iso20022/pkg/pacs_v08"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type ISO20022Service struct {
@@ -31,35 +32,35 @@ func NewISO20022Service() *ISO20022Service {
 // @Tags iso20022
 // @Accept json
 // @Produce json
-// @Param transaction body models.Transaction true "Transaction to convert"
+// @Param transaction body models.TransactionRecord true "Transaction to convert"
 // @Success 200 {object} object{status=string,messageType=string,xml=string}
 // @Failure 500 {object} map[string]string
 // @Router /iso20022/convert [post]
 func (iso *ISO20022Service) ConvertToISO20022(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req models.Transaction
+	var req models.TransactionRecord
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := iso.validator.ValidateStruct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
 	// Create pacs.008 document
 	pacs008, err := iso.CreatePacs008(&req)
 	if err != nil {
-		SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
 		return
 	}
 
 	// Convert to XML
 	xmlData, err := iso.ConvertToXML(pacs008)
 	if err != nil {
-		SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -76,35 +77,35 @@ func (iso *ISO20022Service) ConvertToISO20022(w http.ResponseWriter, r *http.Req
 // @Tags iso20022
 // @Accept json
 // @Produce json
-// @Param transaction body models.Transaction true "Transaction to settle"
+// @Param transaction body models.TransactionRecord true "Transaction to settle"
 // @Success 200 {object} object{status=string,messageType=string}
 // @Failure 500 {object} map[string]string
 // @Router /iso20022/settlement [post]
 func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	var req models.Transaction
+	var req models.TransactionRecord
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
 		return
 	}
 
 	if err := iso.validator.ValidateStruct(&req); err != nil {
-		SendErrorResponse(w, "Validation failed", http.StatusBadRequest, err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
 
 	// Create pacs.002 status report
 	pacs002, err := iso.CreatePacs002(&req, "ACCP")
 	if err != nil {
-		SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
 		return
 	}
 
 	// Send to settlement
 	resp, err := iso.SendToSettlement(pacs002)
 	if err != nil {
-		SendErrorResponse(w, err.Error(), http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -115,7 +116,7 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 	})
 }
 
-func (iso *ISO20022Service) ConvertTransaction(tx *models.Transaction) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
+func (iso *ISO20022Service) ConvertTransaction(tx *models.TransactionRecord) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
 	return iso.CreatePacs008(tx)
 }
 
@@ -128,7 +129,9 @@ func (iso *ISO20022Service) SendToSettlement(doc any) (FundsTransferSettlementRe
 
 	v, err := iso.nibssClient.ProcessFundsTransferSettlement([]byte(xmlData))
 	if err != nil {
-		return FundsTransferSettlementResponse{}, fmt.Errorf("failed to send to settlement: %w", err)
+		return FundsTransferSettlementResponse{
+			Status: err.Error(),
+		}, fmt.Errorf("failed to send to settlement: %w", err)
 	}
 
 	if v == nil {
@@ -144,7 +147,7 @@ func (iso *ISO20022Service) SendToSettlement(doc any) (FundsTransferSettlementRe
 }
 
 // CreatePacs008 creates a pacs.008 FIToFICustomerCreditTransfer message
-func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
+func (iso *ISO20022Service) CreatePacs008(tx *models.TransactionRecord) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
 	msgId := uuid.New().String()
 	creDtTm := time.Now()
 	settlementDate := time.Now()
@@ -202,7 +205,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.Transaction) (*pacs_v08.FIT
 }
 
 // CreatePacs002 creates a pacs.002 payment status report
-func (iso *ISO20022Service) CreatePacs002(tx *models.Transaction, status string) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
+func (iso *ISO20022Service) CreatePacs002(tx *models.TransactionRecord, status string) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
 	msgId := uuid.New().String()
 	creDtTm := time.Now()
 
