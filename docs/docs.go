@@ -15,7 +15,7 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/accounts/balance-enquiry": {
+        "/account/balance-enquiry": {
             "get": {
                 "security": [
                     {
@@ -27,7 +27,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "accounts"
+                    "Accounts"
                 ],
                 "summary": "Get user accounts and balances",
                 "responses": {
@@ -39,31 +39,174 @@ const docTemplate = `{
                                 "accounts": {
                                     "type": "array"
                                 },
-                                "responseCode": {
-                                    "type": "string"
+                                "dailyLimit": {
+                                    "type": "number"
                                 },
-                                "status": {
-                                    "type": "string"
+                                "dailySpent": {
+                                    "type": "number"
+                                },
+                                "singleTransactionLimit": {
+                                    "type": "number"
                                 }
                             }
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
             }
         },
-        "/accounts/name-enquiry": {
+        "/account/beneficiaries": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve all saved beneficiaries for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Get beneficiaries",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "beneficiaries": {
+                                    "type": "array"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/limits": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update daily and single transaction limits for authenticated user",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Update user limits",
+                "parameters": [
+                    {
+                        "description": "Limit update request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "dailyLimit": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                },
+                                "singleTransactionLimit": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "dailyLimit": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                },
+                                "singleTransactionLimit": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/name-enquiry": {
             "get": {
                 "security": [
                     {
@@ -75,7 +218,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "accounts"
+                    "Accounts"
                 ],
                 "summary": "Get account name",
                 "parameters": [
@@ -120,43 +263,23 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/accounts/validate-bvn": {
-            "post": {
-                "description": "Validate a Bank Verification Number and send OTP",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "accounts"
-                ],
-                "summary": "Validate BVN",
-                "parameters": [
-                    {
-                        "description": "BVN validation request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -164,17 +287,227 @@ const docTemplate = `{
                             }
                         }
                     }
+                }
+            }
+        },
+        "/account/notifications": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve all user notifications within a time period for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Get User Notifications",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/services.Notification"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/qr": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Process a scanned QR code data",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "QR"
+                ],
+                "summary": "Process QR Code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "QR token or EMVCo QR string",
+                        "name": "token",
+                        "in": "query",
+                        "required": true
+                    }
                 ],
                 "responses": {
                     "200": {
-                        "description": "OTP sent successfully",
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "amount": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                },
+                                "userId": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generate a QR code for payment",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "QR"
+                ],
+                "summary": "Generate QR Code",
+                "parameters": [
+                    {
+                        "description": "QR generation request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "amount": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "qrCode": {
+                                    "type": "string"
+                                },
+                                "qrImage": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/send-bvn-otp": {
+            "post": {
+                "description": "Generates OTP for BVN validation",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Generate BVN OTP",
+                "parameters": [
+                    {
+                        "description": "BVN OTP request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "bvn": {
+                                    "type": "string"
+                                },
+                                "email": {
+                                    "type": "string"
+                                },
+                                "phoneNumber": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OTP generated successfully",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
                         }
                     },
                     "400": {
-                        "description": string(utils.InvalidRequest),
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "string"
                         }
@@ -182,7 +515,197 @@ const docTemplate = `{
                 }
             }
         },
-        "/accounts/verify-otp": {
+        "/account/send-otp": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generates OTP for general purpose validation",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Generate OTP",
+                "parameters": [
+                    {
+                        "description": "OTP generation request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string"
+                                },
+                                "channel": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OTP generated successfully",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/account/ussd": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get all USSD codes generated by the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "USSD"
+                ],
+                "summary": "Get User USSD Codes",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/services.USSDCode"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generate a cryptographically secure USSD code based on type",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "USSD"
+                ],
+                "summary": "Generate USSD Code",
+                "parameters": [
+                    {
+                        "description": "USSD code request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "amount": {
+                                    "type": "integer",
+                                    "format": "int64"
+                                },
+                                "currency": {
+                                    "type": "string"
+                                },
+                                "type": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "expiresIn": {
+                                    "type": "integer"
+                                },
+                                "ussdCode": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/account/validate-bvn-otp": {
             "post": {
                 "description": "Verify OTP sent for BVN validation",
                 "consumes": [
@@ -192,9 +715,9 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "accounts"
+                    "Accounts"
                 ],
-                "summary": "Verify OTP",
+                "summary": "Validate BVN OTP",
                 "parameters": [
                     {
                         "description": "OTP verification request",
@@ -203,8 +726,13 @@ const docTemplate = `{
                         "required": true,
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
+                            "properties": {
+                                "bvn": {
+                                    "type": "string"
+                                },
+                                "otp": {
+                                    "type": "string"
+                                }
                             }
                         }
                     }
@@ -218,7 +746,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": string(utils.InvalidRequest),
+                        "description": "Invalid request",
                         "schema": {
                             "type": "string"
                         }
@@ -232,25 +760,230 @@ const docTemplate = `{
                 }
             }
         },
+        "/account/virtual-account": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Generate a temporary virtual account tied to merchant from JWT for payment collection",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Get virtual account",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "format": "int64",
+                        "description": "Payment amount",
+                        "name": "amount",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "expiresAt": {
+                                    "type": "string"
+                                },
+                                "virtualAccount": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/auth": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Update authenticated user's account information",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Edit user account",
+                "responses": {}
+            },
+            "post": {
+                "description": "Register a new user with email, password, and name",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Register a new user",
+                "parameters": [
+                    {
+                        "description": "Registration request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.RegisterRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Registration successful",
+                        "schema": {
+                            "$ref": "#/definitions/models.AuthResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Email already exists",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Soft-delete the authenticated user's account",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Auth"
+                ],
+                "summary": "Delete user account",
+                "parameters": [
+                    {
+                        "description": "Password confirmation",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "password": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Account Deleted Successfully",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Account has non-zero balance or pending transactions",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/account": {
             "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Get authenticated user's account information",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
                 "summary": "Get user account details",
                 "responses": {
                     "200": {
                         "description": "User account details",
                         "schema": {
-                            "$ref": "#/definitions/services.User"
+                            "$ref": "#/definitions/models.User"
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "string"
                         }
@@ -266,7 +999,7 @@ const docTemplate = `{
         },
         "/auth/forgot-password": {
             "post": {
-                "description": "Send password reset token to user's email",
+                "description": "Send password reset OTP to user's email or phone",
                 "consumes": [
                     "application/json"
                 ],
@@ -274,35 +1007,34 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
                 "summary": "Request password reset",
                 "parameters": [
                     {
-                        "description": "Email address",
+                        "description": "Phone, email, or username",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
+                            "properties": {
+                                "identifier": {
+                                    "type": "string"
+                                }
                             }
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Reset token sent",
+                        "description": "Password Reset Code Sent",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "type": "string"
                         }
                     },
                     "400": {
-                        "description": string(utils.InvalidRequest),
+                        "description": "Invalid request",
                         "schema": {
                             "type": "string"
                         }
@@ -326,7 +1058,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
                 "summary": "Login user",
                 "parameters": [
@@ -336,7 +1068,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/services.LoginRequest"
+                            "$ref": "#/definitions/models.LoginRequest"
                         }
                     }
                 ],
@@ -344,11 +1076,11 @@ const docTemplate = `{
                     "200": {
                         "description": "Login successful",
                         "schema": {
-                            "$ref": "#/definitions/services.AuthResponse"
+                            "$ref": "#/definitions/models.AuthResponse"
                         }
                     },
                     "400": {
-                        "description": string(utils.InvalidRequest),
+                        "description": "Invalid request",
                         "schema": {
                             "type": "string"
                         }
@@ -370,12 +1102,17 @@ const docTemplate = `{
         },
         "/auth/logout": {
             "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
                 "description": "Logout user and blacklist token",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
                 "summary": "Logout user",
                 "responses": {
@@ -391,9 +1128,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/auth/register": {
+        "/auth/refresh": {
             "post": {
-                "description": "Register a new user with email, password, and name",
+                "description": "Get new access token using refresh token",
                 "consumes": [
                     "application/json"
                 ],
@@ -401,41 +1138,34 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
-                "summary": "Register a new user",
+                "summary": "Refresh access token",
                 "parameters": [
                     {
-                        "description": "Registration request",
+                        "description": "Refresh token",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/services.RegisterRequest"
+                            "type": "object",
+                            "properties": {
+                                "refreshToken": {
+                                    "type": "string"
+                                }
+                            }
                         }
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Registration successful",
+                        "description": "Token refreshed",
                         "schema": {
-                            "$ref": "#/definitions/services.AuthResponse"
+                            "$ref": "#/definitions/models.AuthResponse"
                         }
                     },
-                    "400": {
-                        "description": string(utils.InvalidRequest),
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "409": {
-                        "description": "Email already exists",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal server error",
+                    "401": {
+                        "description": "Invalid refresh token",
                         "schema": {
                             "type": "string"
                         }
@@ -445,7 +1175,7 @@ const docTemplate = `{
         },
         "/auth/reset-password": {
             "post": {
-                "description": "Reset user password using reset token",
+                "description": "Reset user password using OTP reset token",
                 "consumes": [
                     "application/json"
                 ],
@@ -453,7 +1183,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "auth"
+                    "Auth"
                 ],
                 "summary": "Reset password",
                 "parameters": [
@@ -464,8 +1194,13 @@ const docTemplate = `{
                         "required": true,
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
+                            "properties": {
+                                "password": {
+                                    "type": "string"
+                                },
+                                "token": {
+                                    "type": "string"
+                                }
                             }
                         }
                     }
@@ -481,13 +1216,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": string(utils.InvalidRequest),
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "401": {
-                        "description": "Invalid or expired token",
+                        "description": "Invalid request or token",
                         "schema": {
                             "type": "string"
                         }
@@ -539,6 +1268,47 @@ const docTemplate = `{
                                 "status": {
                                     "type": "string"
                                 }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/cards/bins": {
+            "get": {
+                "description": "Retrieve information about a card BIN",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Query Card BIN",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Card BIN (first 6-8 digits)",
+                        "name": "bin",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
@@ -646,52 +1416,6 @@ const docTemplate = `{
                                     "type": "number",
                                     "format": "float64"
                                 },
-                                "cardId": {
-                                    "type": "string"
-                                },
-                                "status": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/cards/{cardId}/reinstate": {
-            "put": {
-                "description": "Reactivate a suspended card",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "cards"
-                ],
-                "summary": "Reinstate card",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Card ID",
-                        "name": "cardId",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
                                 "cardId": {
                                     "type": "string"
                                 },
@@ -864,81 +1588,30 @@ const docTemplate = `{
                 }
             }
         },
-        "/merchants": {
+        "/merchant": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Retrieve a list of all merchants, optionally filtered by status",
+                "description": "Retrieve merchant data and stats for the authenticated user",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "merchants"
-                ],
-                "summary": "List all merchants",
-                "parameters": [
-                    {
-                        "enum": [
-                            "pending",
-                            "active",
-                            "suspended",
-                            "rejected"
-                        ],
-                        "type": "string",
-                        "description": "Filter by status",
-                        "name": "status",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.Merchant"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/merchants/me": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Retrieve merchant information for the authenticated user",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "merchants"
+                    "Merchants"
                 ],
                 "summary": "Get merchant details",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.Merchant"
+                            "$ref": "#/definitions/services.MerchantStats"
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -980,7 +1653,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "merchants"
+                    "Merchants"
                 ],
                 "summary": "Update merchant details",
                 "parameters": [
@@ -1011,7 +1684,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1038,9 +1711,7 @@ const docTemplate = `{
                         }
                     }
                 }
-            }
-        },
-        "/merchants/onboard": {
+            },
             "post": {
                 "security": [
                     {
@@ -1055,7 +1726,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "merchants"
+                    "Merchants"
                 ],
                 "summary": "Onboard a new merchant",
                 "parameters": [
@@ -1086,7 +1757,7 @@ const docTemplate = `{
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1115,7 +1786,58 @@ const docTemplate = `{
                 }
             }
         },
-        "/merchants/status": {
+        "/merchant/list": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve a list of all merchants, optionally filtered by status",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Merchants"
+                ],
+                "summary": "List all merchants",
+                "parameters": [
+                    {
+                        "enum": [
+                            "pending",
+                            "active",
+                            "suspended",
+                            "rejected"
+                        ],
+                        "type": "string",
+                        "description": "Filter by status",
+                        "name": "status",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Merchant"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/merchant/status": {
             "put": {
                 "security": [
                     {
@@ -1130,7 +1852,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "merchants"
+                    "Merchants"
                 ],
                 "summary": "Update merchant status",
                 "parameters": [
@@ -1207,9 +1929,9 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "payments"
+                    "Payments"
                 ],
-                "summary": "Process payment",
+                "summary": "Process Payment",
                 "parameters": [
                     {
                         "description": "Payment request",
@@ -1217,7 +1939,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/providers.PaymentRequest"
+                            "$ref": "#/definitions/models.PaymentRequest"
                         }
                     }
                 ],
@@ -1225,158 +1947,49 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/providers.PaymentResponse"
+                            "$ref": "#/definitions/models.PaymentResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
             }
         },
-        "/qr/generate": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Generate a QR code for payment with specified amount",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "QR"
-                ],
-                "summary": "Generate QR Code",
-                "parameters": [
-                    {
-                        "description": "QR generation request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "amount": {
-                                    "type": "integer",
-                                    "format": "int64"
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "qrCode": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": string(utils.UnauthorizedError),
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/qr/process": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Process a scanned QR code data",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "QR"
-                ],
-                "summary": "Process QR Code",
-                "parameters": [
-                    {
-                        "description": "QR processing request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "qrData": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "amount": {
-                                    "type": "integer",
-                                    "format": "int64"
-                                },
-                                "userId": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/transactions": {
+        "/transaction": {
             "get": {
                 "security": [
                     {
@@ -1388,26 +2001,38 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "transactions"
+                    "Transactions"
                 ],
                 "summary": "List transactions",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Filter by transaction ID",
-                        "name": "id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Filter by card ID",
-                        "name": "cardId",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
                         "description": "Filter by status",
                         "name": "status",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by start date (RFC3339 format)",
+                        "name": "startDate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by end date (RFC3339 format)",
+                        "name": "endDate",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page size",
+                        "name": "limit",
                         "in": "query"
                     }
                 ],
@@ -1415,30 +2040,22 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "properties": {
-                                "count": {
-                                    "type": "integer"
-                                },
-                                "transactions": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/definitions/services.TransactionDTO"
-                                    }
-                                }
-                            }
+                            "$ref": "#/definitions/services.PaginatedTransactions"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
             }
         },
-        "/transactions/recent": {
+        "/transaction/recent": {
             "get": {
                 "security": [
                     {
@@ -1450,7 +2067,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "transactions"
+                    "Transactions"
                 ],
                 "summary": "Get recent transactions",
                 "parameters": [
@@ -1467,32 +2084,41 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/services.TransactionDTO"
+                                "$ref": "#/definitions/services.TransactionHistory"
                             }
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "401": {
-                        "description": string(utils.UnauthorizedError),
+                        "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
             }
         },
-        "/transactions/{txId}": {
+        "/transaction/{txId}": {
             "get": {
                 "security": [
                     {
@@ -1504,7 +2130,7 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "transactions"
+                    "Transactions"
                 ],
                 "summary": "Get transaction by ID",
                 "parameters": [
@@ -1520,133 +2146,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/services.TransactionDTO"
+                            "$ref": "#/definitions/services.TransactionHistory"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ussd/codes": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Get all USSD codes generated by the authenticated user",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "USSD"
-                ],
-                "summary": "Get User USSD Codes",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/services.USSDCode"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
                             }
                         }
                     },
-                    "401": {
-                        "description": string(utils.UnauthorizedError),
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    },
                     "500": {
                         "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/ussd/generate": {
-            "post": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Generate a cryptographically secure USSD code based on type",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "USSD"
-                ],
-                "summary": "Generate USSD Code",
-                "parameters": [
-                    {
-                        "description": "USSD code request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
                         "schema": {
                             "type": "object",
-                            "properties": {
-                                "amount": {
-                                    "type": "integer",
-                                    "format": "int64"
-                                },
-                                "currency": {
-                                    "type": "string"
-                                },
-                                "type": {
-                                    "type": "string"
-                                }
+                            "additionalProperties": {
+                                "type": "string"
                             }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "code": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": string(utils.UnauthorizedError),
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
                         }
                     }
                 }
@@ -1694,7 +2212,10 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/services.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1702,6 +2223,61 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "models.AuthResponse": {
+            "description": "Authentication response structure",
+            "type": "object",
+            "properties": {
+                "refreshToken": {
+                    "description": "JWT refresh token",
+                    "type": "string",
+                    "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                },
+                "token": {
+                    "description": "JWT token",
+                    "type": "string",
+                    "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                },
+                "user": {
+                    "description": "User information",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.User"
+                        }
+                    ]
+                }
+            }
+        },
+        "models.DeviceInfo": {
+            "description": "Device information structure",
+            "type": "object",
+            "required": [
+                "model",
+                "os",
+                "osVersion"
+            ],
+            "properties": {
+                "isPhysicalDevice": {
+                    "description": "Whether the device is physical or an emulator",
+                    "type": "boolean",
+                    "example": true
+                },
+                "model": {
+                    "description": "Device model",
+                    "type": "string",
+                    "example": "iPhone 12"
+                },
+                "os": {
+                    "description": "Device OS platform ,oneof=iOS iPadOS Android web",
+                    "type": "string",
+                    "example": "iOS"
+                },
+                "osVersion": {
+                    "description": "Device OS version",
+                    "type": "string",
+                    "example": "iOS 14.0"
+                }
+            }
+        },
         "models.Location": {
             "type": "object",
             "properties": {
@@ -1719,12 +2295,38 @@ const docTemplate = `{
                 }
             }
         },
+        "models.LoginRequest": {
+            "description": "Login request structure",
+            "type": "object",
+            "required": [
+                "deviceInfo",
+                "identifier",
+                "password"
+            ],
+            "properties": {
+                "deviceInfo": {
+                    "description": "Device information for login",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.DeviceInfo"
+                        }
+                    ]
+                },
+                "identifier": {
+                    "description": "User phone number, email, or username",
+                    "type": "string",
+                    "example": "+2348012345678"
+                },
+                "password": {
+                    "description": "User password",
+                    "type": "string",
+                    "minLength": 6
+                }
+            }
+        },
         "models.Merchant": {
             "type": "object",
             "properties": {
-                "accountId": {
-                    "type": "string"
-                },
                 "businessName": {
                     "type": "string"
                 },
@@ -1761,99 +2363,46 @@ const docTemplate = `{
             "type": "object",
             "additionalProperties": {}
         },
-        "models.TransactionRecord": {
-            "type": "object",
-            "properties": {
-                "amount": {
-                    "type": "number"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "currency": {
-                    "type": "string"
-                },
-                "device_id": {
-                    "type": "string"
-                },
-                "error_message": {
-                    "type": "string"
-                },
-                "fee": {
-                    "type": "number"
-                },
-                "debit_id": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "integer"
-                },
-                "location": {
-                    "$ref": "#/definitions/models.Location"
-                },
-                "metadata": {
-                    "$ref": "#/definitions/models.Metadata"
-                },
-                "processed_at": {
-                    "type": "string"
-                },
-                "reference_id": {
-                    "type": "string"
-                },
-                "settled_at": {
-                    "type": "string"
-                },
-                "signature": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "sync_status": {
-                    "type": "string"
-                },
-                "to_bank_code": {
-                    "type": "string"
-                },
-                "credit_id": {
-                    "type": "string"
-                },
-                "total_amount": {
-                    "type": "number"
-                },
-                "transaction_id": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "providers.PaymentMode": {
+        "models.PaymentMode": {
             "type": "string",
             "enum": [
                 "CARD",
                 "QR",
                 "BANK_TRANSFER",
                 "USSD",
-                "VOICE"
+                "VOICE",
+                "AIRTIME_DATA"
             ],
             "x-enum-varnames": [
                 "PaymentModeCard",
                 "PaymentModeQR",
                 "PaymentModeBankTransfer",
                 "PaymentModeUSSD",
-                "PaymentModeVoice"
+                "PaymentModeVoice",
+                "PaymentModeAirtimeData"
             ]
         },
-        "providers.PaymentRequest": {
+        "models.PaymentRequest": {
             "type": "object",
+            "required": [
+                "oneTimeCode",
+                "transactionId"
+            ],
             "properties": {
                 "amount": {
                     "type": "integer"
+                },
+                "beneficiaryAccountName": {
+                    "type": "string"
+                },
+                "beneficiaryAccountNumber": {
+                    "type": "string"
+                },
+                "beneficiaryBankCode": {
+                    "type": "string"
+                },
+                "beneficiaryBankName": {
+                    "type": "string"
                 },
                 "currency": {
                     "type": "string"
@@ -1865,34 +2414,45 @@ const docTemplate = `{
                     "$ref": "#/definitions/models.Location"
                 },
                 "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
+                    "$ref": "#/definitions/models.Metadata"
                 },
                 "narration": {
                     "type": "string"
                 },
-                "paymentMode": {
-                    "$ref": "#/definitions/providers.PaymentMode"
-                },
-                "toAccount": {
+                "oneTimeCode": {
                     "type": "string"
+                },
+                "paymentMode": {
+                    "$ref": "#/definitions/models.PaymentMode"
+                },
+                "saveBeneficiary": {
+                    "type": "boolean"
                 },
                 "transactionId": {
                     "type": "string"
+                },
+                "txType": {
+                    "$ref": "#/definitions/models.PaymentType"
                 },
                 "userId": {
                     "type": "string"
                 }
             }
         },
-        "providers.PaymentResponse": {
+        "models.PaymentResponse": {
             "type": "object",
             "properties": {
                 "message": {
                     "type": "string"
                 },
+                "metadata": {
+                    "$ref": "#/definitions/models.Metadata"
+                },
                 "paymentMode": {
-                    "$ref": "#/definitions/providers.PaymentMode"
+                    "$ref": "#/definitions/models.PaymentMode"
+                },
+                "reference": {
+                    "type": "string"
                 },
                 "status": {
                     "type": "string"
@@ -1908,97 +2468,20 @@ const docTemplate = `{
                 }
             }
         },
-        "services.AuthResponse": {
-            "description": "Authentication response structure",
-            "type": "object",
-            "properties": {
-                "token": {
-                    "description": "JWT token",
-                    "type": "string",
-                    "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                },
-                "user": {
-                    "description": "User information",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/services.User"
-                        }
-                    ]
-                }
-            }
-        },
-        "services.ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "details": {
-                    "description": "Validation details",
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "error": {
-                    "description": "Error message",
-                    "type": "string"
-                }
-            }
-        },
-        "services.LoginRequest": {
-            "description": "Login request structure",
-            "type": "object",
-            "required": [
-                "password",
-                "phoneNumber"
+        "models.PaymentType": {
+            "type": "string",
+            "enum": [
+                "DEBIT",
+                "CREDIT",
+                "WITHDRAWAL"
             ],
-            "properties": {
-                "password": {
-                    "description": "User password",
-                    "type": "string",
-                    "minLength": 6,
-                    "example": "password123"
-                },
-                "phoneNumber": {
-                    "description": "User phone number",
-                    "type": "string",
-                    "example": "+2348012345678"
-                }
-            }
+            "x-enum-varnames": [
+                "DebitPayment",
+                "CreditPayment",
+                "WithdrawalPayment"
+            ]
         },
-        "services.OnboardMerchantRequest": {
-            "type": "object",
-            "required": [
-                "businessName",
-                "businessType",
-                "settlementCycle",
-                "taxId"
-            ],
-            "properties": {
-                "businessName": {
-                    "type": "string",
-                    "minLength": 2
-                },
-                "businessType": {
-                    "type": "string"
-                },
-                "commissionRate": {
-                    "type": "number",
-                    "maximum": 100,
-                    "minimum": 0
-                },
-                "settlementCycle": {
-                    "type": "string",
-                    "enum": [
-                        "daily",
-                        "weekly",
-                        "monthly"
-                    ]
-                },
-                "taxId": {
-                    "type": "string"
-                }
-            }
-        },
-        "services.RegisterRequest": {
+        "models.RegisterRequest": {
             "description": "Registration request structure",
             "type": "object",
             "required": [
@@ -2007,7 +2490,9 @@ const docTemplate = `{
                 "FirstName",
                 "LastName",
                 "Password",
-                "PhoneNumber"
+                "PhoneNumber",
+                "Username",
+                "pushToken"
             ],
             "properties": {
                 "BVN": {
@@ -2035,42 +2520,361 @@ const docTemplate = `{
                 "Password": {
                     "description": "User password",
                     "type": "string",
-                    "minLength": 6,
-                    "example": "password123"
+                    "minLength": 6
                 },
                 "PhoneNumber": {
                     "description": "Phone number",
                     "type": "string",
                     "example": "+2348012345678"
+                },
+                "Username": {
+                    "description": "Username",
+                    "type": "string",
+                    "minLength": 3,
+                    "example": "johndoe"
+                },
+                "pushToken": {
+                    "description": "Expo push token for notifications",
+                    "type": "string",
+                    "example": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
                 }
             }
         },
-        "services.TransactionDTO": {
+        "models.TransactionRecord": {
             "type": "object",
             "properties": {
                 "amount": {
                     "type": "integer"
                 },
-                "cardId": {
-                    "type": "string"
-                },
-                "createdAt": {
+                "created_at": {
                     "type": "string"
                 },
                 "currency": {
                     "type": "string"
                 },
-                "merchantId": {
+                "device_id": {
+                    "type": "string"
+                },
+                "error_message": {
+                    "type": "string"
+                },
+                "fee": {
+                    "type": "integer"
+                },
+                "from_account_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "location": {
+                    "$ref": "#/definitions/models.Location"
+                },
+                "metadata": {
+                    "$ref": "#/definitions/models.Metadata"
+                },
+                "processed_at": {
+                    "type": "string"
+                },
+                "reference": {
+                    "type": "string"
+                },
+                "settled_at": {
+                    "type": "string"
+                },
+                "signature": {
                     "type": "string"
                 },
                 "status": {
                     "type": "string"
                 },
-                "txId": {
+                "sync_status": {
+                    "type": "string"
+                },
+                "to_account_id": {
+                    "type": "string"
+                },
+                "to_bank_code": {
+                    "type": "string"
+                },
+                "total_amount": {
+                    "type": "integer"
+                },
+                "transactionId": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.USSDCodeType": {
+            "type": "string",
+            "enum": [
+                "PUSH",
+                "PULL"
+            ],
+            "x-enum-varnames": [
+                "PushPayment",
+                "PullPayment"
+            ]
+        },
+        "models.User": {
+            "description": "User structure",
+            "type": "object",
+            "properties": {
+                "BVN": {
+                    "description": "User BVN",
+                    "type": "string",
+                    "example": "12345678901"
+                },
+                "accountId": {
+                    "description": "User account ID",
+                    "type": "string",
+                    "example": "1234567890"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "default:0": {
+                    "type": "integer"
+                },
+                "email": {
+                    "description": "User email",
+                    "type": "string",
+                    "example": "user@example.com"
+                },
+                "firstName": {
+                    "description": "User first name",
+                    "type": "string",
+                    "example": "John"
+                },
+                "id": {
+                    "description": "User ID",
+                    "type": "integer",
+                    "example": 1
+                },
+                "kycLevel": {
+                    "type": "integer",
+                    "default": 0
+                },
+                "kycStatus": {
+                    "type": "string"
+                },
+                "lastLogin": {
+                    "type": "string"
+                },
+                "lastName": {
+                    "description": "User last name",
+                    "type": "string",
+                    "example": "Doe"
+                },
+                "lockedUntil": {
+                    "type": "string"
+                },
+                "merchant": {
+                    "description": "Merchant information (if user is a merchant)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/models.Merchant"
+                        }
+                    ]
+                },
+                "phoneNumber": {
+                    "description": "User phone number",
+                    "type": "string",
+                    "example": "+2348012345678"
+                },
+                "pushToken": {
+                    "description": "DeviceID            string    ` + "`" + `json:\"device_id\"` + "`" + `",
+                    "type": "string",
+                    "example": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
+                },
+                "role": {
+                    "description": "User role (e.g., user, merchant)",
+                    "type": "string",
+                    "example": "user"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "userName": {
+                    "description": "User username",
+                    "type": "string",
+                    "example": "johndoe"
+                }
+            }
+        },
+        "services.MerchantStats": {
+            "type": "object",
+            "properties": {
+                "byStatus": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.TransactionStatusBreakdown"
+                    }
+                },
+                "todayCompletedCount": {
+                    "type": "integer"
+                },
+                "todayCompletedVolume": {
+                    "type": "integer"
+                },
+                "todayProfit": {
+                    "type": "number"
+                },
+                "totalCompletedCount": {
+                    "type": "integer"
+                },
+                "totalCompletedVolume": {
+                    "type": "integer"
+                },
+                "totalProfit": {
+                    "type": "number"
+                }
+            }
+        },
+        "services.Notification": {
+            "type": "object",
+            "properties": {
+                "icon": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "read": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "services.OnboardMerchantRequest": {
+            "type": "object",
+            "required": [
+                "businessName",
+                "businessType",
+                "settlementCycle",
+                "taxId"
+            ],
+            "properties": {
+                "businessName": {
+                    "type": "string",
+                    "minLength": 2
+                },
+                "businessType": {
+                    "type": "string"
+                },
+                "commissionRate": {
+                    "type": "number",
+                    "maximum": 100,
+                    "minimum": 0
+                },
+                "settlementCycle": {
+                    "type": "string",
+                    "enum": [
+                        "DAILY",
+                        "WEEKLY",
+                        "MONTHLY"
+                    ]
+                },
+                "taxId": {
+                    "type": "string"
+                }
+            }
+        },
+        "services.PaginatedTransactions": {
+            "type": "object",
+            "properties": {
+                "hasMore": {
+                    "type": "boolean"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "transactions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/services.TransactionHistory"
+                    }
+                }
+            }
+        },
+        "services.TransactionHistory": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "integer"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "fee": {
+                    "type": "integer"
+                },
+                "fromAccount": {
+                    "type": "string"
+                },
+                "merchantId": {
+                    "type": "string"
+                },
+                "narration": {
+                    "type": "string"
+                },
+                "paymentMode": {
+                    "$ref": "#/definitions/models.PaymentMode"
+                },
+                "profit": {
+                    "type": "number"
+                },
+                "settlementDate": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "toAccount": {
+                    "type": "string"
+                },
+                "transactionDate": {
+                    "type": "string"
+                },
+                "transactionId": {
                     "type": "string"
                 },
                 "txType": {
                     "type": "string"
+                }
+            }
+        },
+        "services.TransactionStatusBreakdown": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string"
+                },
+                "totalAmount": {
+                    "type": "integer"
+                },
+                "transactionCount": {
+                    "type": "integer"
                 }
             }
         },
@@ -2099,7 +2903,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "txType": {
-                    "$ref": "#/definitions/services.USSDCodeType"
+                    "$ref": "#/definitions/models.USSDCodeType"
                 },
                 "used": {
                     "type": "boolean"
@@ -2108,17 +2912,6 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
-        },
-        "services.USSDCodeType": {
-            "type": "string",
-            "enum": [
-                "PUSH",
-                "PULL"
-            ],
-            "x-enum-varnames": [
-                "PushPayment",
-                "PullPayment"
-            ]
         },
         "services.UpdateMerchantRequest": {
             "type": "object",
@@ -2137,54 +2930,10 @@ const docTemplate = `{
                 "settlementCycle": {
                     "type": "string",
                     "enum": [
-                        "daily",
-                        "weekly",
-                        "monthly"
+                        "DAILY",
+                        "WEEKLY",
+                        "MONTHLY"
                     ]
-                }
-            }
-        },
-        "services.User": {
-            "description": "User structure",
-            "type": "object",
-            "properties": {
-                "AccountId": {
-                    "description": "User account ID` + "`" + `",
-                    "type": "string",
-                    "example": "1234567890"
-                },
-                "BVN": {
-                    "description": "User BVN",
-                    "type": "string",
-                    "example": "12345678901"
-                },
-                "FirstName": {
-                    "description": "User first name",
-                    "type": "string",
-                    "example": "John"
-                },
-                "LastName": {
-                    "description": "User last name",
-                    "type": "string",
-                    "example": "Doe"
-                },
-                "PhoneNumber": {
-                    "description": "User phone number",
-                    "type": "string",
-                    "example": "+2348012345678"
-                },
-                "device_id": {
-                    "type": "string"
-                },
-                "email": {
-                    "description": "User email",
-                    "type": "string",
-                    "example": "user@example.com"
-                },
-                "id": {
-                    "description": "User ID",
-                    "type": "integer",
-                    "example": 1
                 }
             }
         }

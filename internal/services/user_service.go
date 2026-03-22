@@ -6,10 +6,10 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -23,35 +23,35 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-type AuthService struct {
-	db           *sql.DB
-	redis        *redis.Client
-	validator    *validator.Validate
-	notification *NotificationService
+type UserService struct {
+	db              *sql.DB
+	redis           *redis.Client
+	validator       *validator.Validate
+	notificationSvc *NotificationService
 }
 
-func NewAuthService(db *sql.DB, redisClient *redis.Client, notificationService *NotificationService) *AuthService {
-	return &AuthService{
-		db:           db,
-		redis:        redisClient,
-		validator:    validator.New(),
-		notification: notificationService,
+func NewUserService(db *sql.DB, redisClient *redis.Client, notificationService *NotificationService) *UserService {
+	return &UserService{
+		db:              db,
+		redis:           redisClient,
+		validator:       validator.New(),
+		notificationSvc: notificationService,
 	}
 }
 
-// Register handles user registration
+// RegisterNewUser handles user registration
 // @Summary Register a new user
 // @Description Register a new user with email, password, and name
-// @Tags auth
+// @Tags Auth
 // @Accept json
 // @Produce json
-// @Param request body RegisterRequest true "Registration request"
-// @Success 200 {object} AuthResponse "Registration successful"
-// @Failure 400 {string} string utils.InvalidRequest
+// @Param request body models.RegisterRequest true "Registration request"
+// @Success 200 {object} models.AuthResponse "Registration successful"
+// @Failure 400 {string} string "Invalid request"
 // @Failure 409 {string} string "Email already exists"
-// @Failure 500 {string} string utils.InternalServiceError
-// @Router /auth/register [post]
-func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
+// @Failure 500 {string} string "Internal server error"
+// @Router /auth [post]
+func (s *UserService) RegisterNewUser(w http.ResponseWriter, r *http.Request) {
 	slog.Info("auth.register.attempt", "remote_addr", r.RemoteAddr)
 
 	maxBytes := 1_048_576 // 1 MB
@@ -129,22 +129,31 @@ func (s *AuthService) Register(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("auth.register.success", "user_id", userID)
 
+	if s.notificationSvc != nil {
+		go s.notificationSvc.SendRegisterEmail(&models.User{
+			ID:        userID,
+			FirstName: req.FirstName,
+			LastName:  req.LastName,
+			Email:     req.Email,
+		})
+	}
+
 	utils.SendSuccessResponse(w, "Registration Successful", map[string]any{"userId": userID}, http.StatusOK)
 }
 
-// Login handles user authentication
+// UserLogin handles user authentication
 // @Summary Login user
 // @Description Authenticate user with email and password
-// @Tags auth
+// @Tags Auth
 // @Accept json
 // @Produce json
-// @Param request body LoginRequest true "Login request"
-// @Success 200 {object} AuthResponse "Login successful"
-// @Failure 400 {string} string string(utils.InvalidRequest)
-// @Failure 401 {string} string "Invalid Credentials"
+// @Param request body models.LoginRequest true "Login request"
+// @Success 200 {object} models.AuthResponse "Login successful"
+// @Failure 400 {string} string "Invalid request"
+// @Failure 401 {string} string "Invalid credentials"
 // @Failure 500 {string} string "Internal server error"
 // @Router /auth/login [post]
-func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
+func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 
@@ -170,7 +179,7 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("auth.login.request")
+	slog.Info("auth.login.request", "identifier", req.Identifier)
 
 	var user models.User
 	var hashedPassword string
@@ -195,7 +204,8 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 			m.commission_rate, m.settlement_cycle, m.created_at, m.updated_at
 		FROM users u
 		LEFT JOIN merchants m ON u.id = m.user_id
-		WHERE u.phone_number = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(u.username) = LOWER($1)`
+		WHERE (u.phone_number = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(u.username) = LOWER($1))
+		  AND u.deleted_at IS NULL`
 
 	err := s.db.QueryRow(query, req.Identifier).Scan(
 		&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.BVN, &user.Username, &hashedPassword, &user.AccountId,
@@ -204,7 +214,7 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("auth.login.user_not_found")
 			utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
 		} else {
@@ -249,7 +259,12 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 		merchant = *user.Merchant
 	}
 
-	sessionID := fmt.Sprintf("%d_%d_%d", user.ID, time.Now().Unix(), rand.Int63())
+	sessionID, err := generateSessionID(user.ID)
+	if err != nil {
+		slog.Error("auth.login.session_id_failed", "user_id", user.ID, "error", err)
+		utils.SendErrorResponse(w, "Failed To Generate Token", http.StatusInternalServerError, nil)
+		return
+	}
 	deviceID := fmt.Sprintf("%s_%s_%s", req.DeviceInfo.Platform, req.DeviceInfo.Model, req.DeviceInfo.OSVersion)
 
 	token, err := generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
@@ -290,62 +305,67 @@ func (s *AuthService) Login(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("auth.login.success", "user_id", user.ID)
 
+	if s.notificationSvc != nil {
+		go s.notificationSvc.SendLoginEmail(&user, deviceID)
+	}
+
 	utils.SendSuccessResponse(w, "Login Successful", response, http.StatusOK)
 }
 
-// Logout handles user logout
+// LogoutUser handles user logout
 // @Summary Logout user
 // @Description Logout user and blacklist token
-// @Tags auth
+// @Tags Auth
 // @Produce json
 // @Success 200 {object} map[string]string "Logout successful"
+// @Security BearerAuth
 // @Router /auth/logout [post]
-func (s *AuthService) Logout(w http.ResponseWriter, r *http.Request) {
-	token := r.Header.Get("Authorization")
-	if token != "" && len(token) > 7 {
-		token = token[7:] // Remove "Bearer " prefix
+func (s *UserService) LogoutUser(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && s.redis != nil {
+		accessToken := authHeader[7:]
+		ctx := context.Background()
 
-		if s.redis != nil {
-			ctx := context.Background()
+		claims := jwt.MapClaims{}
+		jwt.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {
+			return []byte(viper.GetString("jwt.secret_key")), nil
+		})
 
-			// Parse token to get session ID
-			claims := jwt.MapClaims{}
-			jwt.ParseWithClaims(token, claims, func(token *jwt.Token) (any, error) {
-				return []byte(viper.GetString("jwt.secret_key")), nil
-			})
-
-			if sid, ok := claims["sid"].(string); ok {
-				s.redis.Del(ctx, utils.SessionKeyPrefix+sid)
-			}
-
-			// Blacklist token
-			key := fmt.Sprintf("BLACKLISTED_TOKEN:%s", token)
-			expiry := time.Duration(viper.GetInt("jwt.expiry_minutes")) * time.Minute
-			if err := s.redis.Set(ctx, key, "1", expiry).Err(); err != nil {
-				slog.Error("auth.logout.blacklist_failed", "error", err)
-			}
+		if sid, ok := claims["sid"].(string); ok {
+			// Delete session — invalidates all tokens bound to this session.
+			s.redis.Del(ctx, utils.SessionKeyPrefix+sid)
 		}
+
+		// Blacklist the access token for its remaining lifetime so in-flight
+		// requests with the same token are rejected immediately.
+		s.blacklistToken(ctx, accessToken, accessTokenExpiry())
 	}
 
 	utils.SendSuccessResponse(w, "Logout Successful", nil, http.StatusOK)
 }
 
+// blacklistToken adds a token to the revocation list with a TTL matching its
+// remaining validity window. Uses the same key prefix as checkTokenBlacklist
+// in auth middleware.
+func (s *UserService) blacklistToken(ctx context.Context, token string, ttl time.Duration) {
+	key := utils.BlacklistKeyPrefix + token
+	if err := s.redis.Set(ctx, key, "1", ttl).Err(); err != nil {
+		slog.Error("auth.blacklist_token.failed", "error", err)
+	}
+}
+
 // GetUserAccount retrieves user account details from auth token
 // @Summary Get user account details
 // @Description Get authenticated user's account information
-// @Tags auth
+// @Tags Auth
 // @Produce json
-// @Success 200 {object} User "User account details"
-// @Failure 401 {string} string string(utils.UnauthorizedError)
+// @Success 200 {object} models.User "User account details"
+// @Failure 401 {string} string "Unauthorized"
 // @Failure 500 {string} string "Internal server error"
+// @Security BearerAuth
 // @Router /auth/account [get]
-func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("userID")
-	if userID == nil {
-		slog.Warn("auth.account.unauthorized")
-		http.Error(w, string(utils.UnauthorizedError), http.StatusUnauthorized)
-		return
-	}
+func (s *UserService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	var user models.User
 	err := s.db.QueryRow("SELECT users.id, email, first_name, last_name, phone_number, users.account_id FROM users LEFT JOIN accounts ON users.id = accounts.user_id WHERE users.id = $1",
@@ -364,21 +384,193 @@ func (s *AuthService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 	utils.SendSuccessResponse(w, "", user, http.StatusOK)
 }
 
+// EditUserProfile Edit user account details
+// @Summary Edit user account
+// @Description Update authenticated user's account information
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Router /auth [put]
+func (s *UserService) EditUserProfile(w http.ResponseWriter, r *http.Request) {}
+
+// DeleteUserProfile deletes user account details from auth token
+// @Summary Delete user account
+// @Description Soft-delete the authenticated user's account
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body object{password=string} true "Password confirmation"
+// @Success 200 {string} string "Account Deleted Successfully"
+// @Failure 401 {string} string "Unauthorized"
+// @Failure 409 {string} string "Account has non-zero balance or pending transactions"
+// @Failure 500 {string} string "Internal server error"
+// @Security BearerAuth
+// @Router /auth [delete]
+func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) {
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	var req struct {
+		Password string `json:"password" validate:"required,min=6,max=72"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
+		return
+	}
+	if err := s.validator.Struct(&req); err != nil {
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
+		return
+	}
+
+	// Verify password and confirm account is not already deleted.
+	var hashedPassword string
+	var deletedAt sql.NullTime
+	err := s.db.QueryRow(
+		`SELECT password, deleted_at FROM users WHERE id = $1`, userID,
+	).Scan(&hashedPassword, &deletedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			utils.SendErrorResponse(w, utils.UserNotFoundError, http.StatusNotFound, nil)
+		} else {
+			slog.Error("auth.delete.fetch_failed", "user_id", userID, "error", err)
+			utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusInternalServerError, nil)
+		}
+		return
+	}
+	if deletedAt.Valid {
+		utils.SendErrorResponse(w, "Account Already Deleted", http.StatusGone, nil)
+		return
+	}
+	if !verifyPassword(req.Password, hashedPassword) {
+		utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+		return
+	}
+
+	// Block if any account holds a non-zero balance.
+	var nonZeroBalances int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM accounts WHERE user_id = $1 AND balance <> 0`, userID,
+	).Scan(&nonZeroBalances); err != nil {
+		slog.Error("auth.delete.balance_check_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusInternalServerError, nil)
+		return
+	}
+	if nonZeroBalances > 0 {
+		utils.SendErrorResponse(w, "Account balance must be zero before deletion", http.StatusConflict, nil)
+		return
+	}
+
+	// Block if any pending or processing transactions exist.
+	var pendingTx int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND status IN ('PENDING', 'PROCESSING')`, userID,
+	).Scan(&pendingTx); err != nil {
+		slog.Error("auth.delete.pending_tx_check_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusInternalServerError, nil)
+		return
+	}
+	if pendingTx > 0 {
+		utils.SendErrorResponse(w, "Cannot delete account with pending transactions", http.StatusConflict, nil)
+		return
+	}
+
+	// Soft delete: stamp deleted_at, set status to inactive, and anonymise PII
+	// so the row satisfies unique constraints for email/phone on future
+	// registrations (handled by the partial unique indexes in migration 032).
+	_, err = s.db.Exec(`
+		UPDATE users
+		SET
+			status           = 'inactive',
+			deleted_at       = NOW(),
+			deletion_reason  = 'USER_REQUEST',
+			email            = 'deleted_' || id || '@ruralpay.invalid',
+			phone_number     = NULL,
+			password         = '',
+			updated_at       = NOW()
+		WHERE id = $1
+	`, userID)
+	if err != nil {
+		slog.Error("auth.delete.soft_delete_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusInternalServerError, nil)
+		return
+	}
+
+	// Revoke all active sessions and blacklist the current access token.
+	if s.redis != nil {
+		ctx := context.Background()
+
+		if authHeader := r.Header.Get("Authorization"); len(authHeader) > 7 {
+			s.blacklistToken(ctx, authHeader[7:], accessTokenExpiry())
+		}
+
+		var cursor uint64
+		for {
+			keys, next, err := s.redis.Scan(
+				ctx, cursor,
+				fmt.Sprintf("%s%d_*", utils.SessionKeyPrefix, userID),
+				100,
+			).Result()
+			if err != nil {
+				slog.Error("auth.delete.redis_scan_failed", "user_id", userID, "error", err)
+				break
+			}
+			if len(keys) > 0 {
+				s.redis.Del(ctx, keys...)
+			}
+			if next == 0 {
+				break
+			}
+			cursor = next
+		}
+	}
+
+	slog.Info("auth.delete.success", "user_id", userID)
+
+	if s.notificationSvc != nil {
+		var deletedUser models.User
+		s.db.QueryRow(`SELECT first_name, email FROM users WHERE id = $1`, userID).Scan(&deletedUser.FirstName, &deletedUser.Email)
+		deletedUser.ID = userID
+		go s.notificationSvc.SendDeleteAccountEmail(&deletedUser)
+	}
+
+	utils.SendSuccessResponse(w, "Account Deleted Successfully", nil, http.StatusOK)
+}
+
+const (
+	minAccessTokenExpiry = 5 * time.Minute
+	defaultAccessExpiry  = 15 * time.Minute
+	refreshTokenExpiry   = 7 * 24 * time.Hour
+)
+
+func accessTokenExpiry() time.Duration {
+	d := time.Duration(viper.GetInt("jwt.expiry_minutes")) * time.Minute
+	if d < minAccessTokenExpiry {
+		d = defaultAccessExpiry
+	}
+	return d
+}
+
 func generateJWTWithSession(userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
+	expiry := accessTokenExpiry()
+	now := time.Now()
+
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"sub":     userID,
 		"sid":     sessionID,
 		"did":     deviceID,
-		"exp":     time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_minutes")) * time.Minute).Unix(),
+		"iat":     now.Unix(),
+		"exp":     now.Add(expiry).Unix(),
 		"iss":     viper.GetString("jwt.issuer"),
 		"aud":     viper.GetString("jwt.audience"),
 	}
 
+	slog.Info("auth.generate_jwt_session", "expiry", expiry)
+
 	if merchant.ID != 0 {
 		claims["merchant_id"] = merchant.ID
 	}
-
 	if merchant.Status != "" {
 		claims["merchant_status"] = merchant.Status
 	}
@@ -386,11 +578,21 @@ func generateJWTWithSession(userID int, merchant models.Merchant, sessionID, dev
 	return token.SignedString([]byte(viper.GetString("jwt.secret_key")))
 }
 
+func generateSessionID(userID int) (string, error) {
+	b := make([]byte, 16)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d_%x", userID, b), nil
+}
+
 func generateRefreshToken(userID int, sessionID string) (string, error) {
+	now := time.Now()
 	claims := jwt.MapClaims{
 		"user_id": userID,
 		"sid":     sessionID,
-		"exp":     time.Now().Add(7 * 24 * time.Hour).Unix(), // 7 days
+		"iat":     now.Unix(),
+		"exp":     now.Add(refreshTokenExpiry).Unix(),
 		"type":    "refresh",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -400,14 +602,14 @@ func generateRefreshToken(userID int, sessionID string) (string, error) {
 // RefreshToken handles token refresh
 // @Summary Refresh access token
 // @Description Get new access token using refresh token
-// @Tags auth
+// @Tags Auth
 // @Accept json
 // @Produce json
-// @Param request body map[string]string true "Refresh token"
-// @Success 200 {object} AuthResponse "Token refreshed"
+// @Param request body object{refreshToken=string} true "Refresh token"
+// @Success 200 {object} models.AuthResponse "Token refreshed"
 // @Failure 401 {string} string "Invalid refresh token"
 // @Router /auth/refresh [post]
-func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
+func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refreshToken" validate:"required"`
 	}
@@ -467,9 +669,31 @@ func (s *AuthService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID := sessionData["device_id"]
 
-	// Generate new tokens
-	newAccessToken, _ := generateJWTWithSession(userID, merchant, sessionID, deviceID)
-	newRefreshToken, _ := generateRefreshToken(userID, sessionID)
+	// Rotate: blacklist the consumed refresh token for its remaining lifetime
+	// so it cannot be reused even if intercepted.
+	if s.redis != nil {
+		ctx := context.Background()
+		var remainingTTL time.Duration
+		if exp, ok := claims["exp"].(float64); ok {
+			remainingTTL = time.Until(time.Unix(int64(exp), 0))
+		}
+		if remainingTTL > 0 {
+			s.blacklistToken(ctx, req.RefreshToken, remainingTTL)
+		}
+	}
+
+	newAccessToken, err := generateJWTWithSession(userID, merchant, sessionID, deviceID)
+	if err != nil {
+		slog.Error("auth.refresh.access_token_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
+		return
+	}
+	newRefreshToken, err := generateRefreshToken(userID, sessionID)
+	if err != nil {
+		slog.Error("auth.refresh.refresh_token_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models.AuthResponse{
@@ -528,18 +752,18 @@ func verifyPassword(password, hashedPassword string) bool {
 
 // ForgotPassword handles password reset request
 // @Summary Request password reset
-// @Description Send password reset token to user's email
-// @Tags auth
+// @Description Send password reset OTP to user's email or phone
+// @Tags Auth
 // @Accept json
 // @Produce json
-// @Param request body map[string]string true "Email address"
-// @Success 200 {object} map[string]string "Reset token sent"
-// @Failure 400 {string} string string(utils.InvalidRequest)
+// @Param request body object{identifier=string} true "Phone, email, or username"
+// @Success 200 {string} string "Password Reset Code Sent"
+// @Failure 400 {string} string "Invalid request"
 // @Failure 404 {string} string "User not found"
 // @Router /auth/forgot-password [post]
-func (s *AuthService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+func (s *UserService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Identifier string `json:"identifier" validate:"required" example:"+2348012345678"`
+		Identifier string `json:"identifier" validate:"required,max=254" example:"+2348012345678"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -590,8 +814,8 @@ func (s *AuthService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send OTP via notification
-	if s.notification != nil {
-		go s.notification.SendOTPEmail(user.Email, otp, "10 minutes", models.ForgotPassword)
+	if s.notificationSvc != nil {
+		go s.notificationSvc.SendOTPEmail(user.Email, otp, "10 minutes", models.ForgotPassword)
 		slog.Info("auth.forgot_password.otp_sent", "user_id", userID)
 	}
 
@@ -602,19 +826,18 @@ func (s *AuthService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 // ResetPassword handles password reset with token
 // @Summary Reset password
-// @Description Reset user password using reset token
-// @Tags auth
-// @Accept JSON
-// @Produce JSON
-// @Param request body map[string]string true "Reset token and new password"
+// @Description Reset user password using OTP reset token
+// @Tags Auth
+// @Accept json
+// @Produce json
+// @Param request body object{token=string,password=string} true "Reset token and new password"
 // @Success 200 {object} map[string]string "Password reset successful"
-// @Failure 400 {string} string utils.InvalidRequest
-// @Failure 401 {string} string utils.TokenError
+// @Failure 400 {string} string "Invalid request or token"
 // @Router /auth/reset-password [post]
-func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
+func (s *UserService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Token    string `json:"token" validate:"required"`
-		Password string `json:"password" validate:"required,min=6"`
+		Token    string `json:"token" validate:"required,max=20"`
+		Password string `json:"password" validate:"required,min=6,max=72"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -695,15 +918,56 @@ func (s *AuthService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"message": "Password Reset successful", "success": true})
 }
 
-func (s *AuthService) CheckUserStatus(userID string) (bool, error) {
+func (s *UserService) CheckUserStatus(userID string) (bool, error) {
 	var status string
-	err := s.db.QueryRow("SELECT status FROM users WHERE id = $1", userID).Scan(&status)
+	var deletedAt sql.NullTime
+	err := s.db.QueryRow(
+		`SELECT status, deleted_at FROM users WHERE id = $1`, userID,
+	).Scan(&status, &deletedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
 		return false, err
 	}
+	return status == "active" && !deletedAt.Valid, nil
+}
 
-	return status == "active", nil
+func (s *UserService) UserFeedback(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Email            string `json:"email" validate:"required,email,max=254"`
+		MostLovedFeature string `json:"mostLovedFeature" validate:"required,max=500"`
+		MostHatedFeature string `json:"mostHatedFeature" validate:"required,max=500"`
+		NiceHaveFeature  string `json:"niceHaveFeature" validate:"required,max=500"`
+		GeneralFeedback  string `json:"generalFeedback" validate:"required,max=1000"`
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Error("feedback.decode_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
+		return
+	}
+
+	if err := s.validator.Struct(&req); err != nil {
+		slog.Warn("feedback.validation_failed", "error", err)
+		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
+		return
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO user_feedback (email, most_loved_feature, most_hated_feature, nice_have_feature, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+	`, req.Email, req.MostLovedFeature, req.MostHatedFeature, req.NiceHaveFeature)
+
+	if err != nil {
+		slog.Error("feedback.recording.failed", "error", err)
+		utils.SendErrorResponse(w, "Failed Recording Feedback", http.StatusFailedDependency, nil)
+		return
+	}
+
+	// Send Feedback Mail
+	go s.notificationSvc.SendFeedbackReceivedEmail(req.Email)
+
+	utils.SendSuccessResponse(w, "Feedback Taken Successfully", nil, http.StatusOK)
 }

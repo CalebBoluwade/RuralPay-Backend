@@ -1,11 +1,14 @@
 package services
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"os"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ruralpay/backend/internal/models"
 )
 
@@ -23,6 +26,19 @@ func NewDoubleLedgerService(db *sql.DB) *DoubleLedgerService {
 		db:               db,
 		systemFeeAccount: systemFeeAccount,
 	}
+}
+
+// GenerateInternalTransactionID Creates A Secure Transaction ID for Transactions.
+func (s *DoubleLedgerService) GenerateInternalTransactionID() string {
+	newUUID := uuid.New().String()
+	timestamp := time.Now().UnixNano()
+	random := make([]byte, 8)
+	rand.Read(random)
+
+	data := fmt.Sprintf("%s:%d:%x", newUUID, timestamp, random)
+	hashed := sha256.Sum256([]byte(data))
+
+	return fmt.Sprintf("TX%x", hashed[:8])
 }
 
 func (s *DoubleLedgerService) Transfer(fromAccountID, toAccountID, transactionId string, amount int64) error {

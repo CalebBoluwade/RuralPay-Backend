@@ -253,19 +253,6 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 		Location: cardReq.Location,
 	}
 
-	if cachedStatus, found := p.checkIdempotency(req.TransactionID); found {
-		slog.Info("card.handle_payment.idempotent", "tx_id", req.TransactionID, "status", cachedStatus)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"success":       cachedStatus == "COMPLETED" || cachedStatus == "PENDING",
-			"transactionId": req.TransactionID,
-			"status":        cachedStatus,
-			"message":       "Payment Already Processed",
-			"paymentMode":   req.PaymentMode,
-		})
-		return
-	}
-
 	response, err := p.ProcessPayment(r.Context(), req)
 	if err != nil {
 		slog.Error("card.handle_payment.failed", "tx_id", req.TransactionID, "error", err)

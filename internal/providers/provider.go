@@ -80,26 +80,10 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	if err := base.verifyAccountAndKYC(req.FromAccount, userID); err != nil {
 		slog.Warn("payment.handle.preflight_failed", "account", req.FromAccount, "user_id", userID, "error", err)
 		if err.Error() == "KYC verification required" {
-			utils.SendErrorResponse(w, "KYC verification required before making payments", http.StatusForbidden, nil)
+			utils.SendErrorResponse(w, "KYC verification required before making payments", http.StatusUnprocessableEntity, nil)
 		} else {
-			utils.SendErrorResponse(w, "Unauthorized: Account does not belong to user", http.StatusForbidden, nil)
+			utils.SendErrorResponse(w, "Unauthorized: Account does not belong to user", http.StatusUnprocessableEntity, nil)
 		}
-		return
-	}
-
-	if cachedStatus, found := base.checkIdempotency(req.TransactionID); found {
-		slog.Info("payment.handle.idempotent", "tx_id", req.TransactionID, "status", cachedStatus)
-
-		if cachedStatus == "COMPLETED" || cachedStatus == "PENDING" {
-			utils.SendSuccessResponse(w, "Payment Already Processed", map[string]any{
-				"transactionId": req.TransactionID,
-				"status":        cachedStatus,
-				"paymentMode":   req.PaymentMode,
-			}, http.StatusOK)
-		} else {
-			utils.SendErrorResponse(w, "Payment Failed Processed", http.StatusBadRequest, nil)
-		}
-
 		return
 	}
 
@@ -140,7 +124,6 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	}
 
 	slog.Info("payment.handle.processed", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
-	base.setIdempotency(req.TransactionID, response.Status)
 	base.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
 
 	go func() {
@@ -240,7 +223,7 @@ func (base *BasePaymentProvider) verifyAccountAndKYC(accountIdentifier string, u
 	`, accountIdentifier).Scan(&ownerID, &kycStatus, &kycLevel)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("account not found")
 		}
 		slog.Error("payment.verify_account_kyc.db_error", "error", err)

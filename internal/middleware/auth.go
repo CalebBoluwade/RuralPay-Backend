@@ -19,13 +19,13 @@ import (
 )
 
 var redisClient *redis.Client
-var authService *services.AuthService
+var userService *services.UserService
 var validator *services.ValidationHelper
 var cfg models.SessionConfig
 
-func InitAuthMiddleware(redis *redis.Client, auth *services.AuthService, config models.SessionConfig) {
+func InitAuthMiddleware(redis *redis.Client, user *services.UserService, config models.SessionConfig) {
 	redisClient = redis
-	authService = auth
+	userService = user
 	validator = services.NewValidationHelper()
 	cfg = config
 }
@@ -46,7 +46,7 @@ func checkTokenBlacklist(token string) bool {
 	if redisClient == nil {
 		return false
 	}
-	key := fmt.Sprintf("blacklist:%s", token)
+	key := utils.BlacklistKeyPrefix + token
 	exists, _ := redisClient.Exists(context.Background(), key).Result()
 	return exists > 0
 }
@@ -128,7 +128,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		active, err := authService.CheckUserStatus(userID)
+		active, err := userService.CheckUserStatus(userID)
 		if err != nil {
 			validator.SendErrorResponse(w, "Invalid User Status", http.StatusUnauthorized, nil)
 			return

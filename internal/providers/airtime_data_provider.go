@@ -96,20 +96,7 @@ func (p *AirtimeDataProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 
 	if err := p.verifyAccountAndKYC(req.DebitAccount, userID); err != nil {
 		slog.Warn("airtime_data.handle.ownership_failed", "account", req.DebitAccount, "user_id", userID)
-		utils.SendErrorResponse(w, "Unauthorized: Account does not belong to user", http.StatusForbidden, nil)
-		return
-	}
-
-	if cachedStatus, found := p.checkIdempotency(req.TransactionID); found {
-		if cachedStatus == "COMPLETED" || cachedStatus == "PENDING" {
-			utils.SendSuccessResponse(w, "Payment Already Processed", map[string]any{
-				"transactionId": req.TransactionID,
-				"status":        cachedStatus,
-				"paymentMode":   models.PaymentModeAirtimeData,
-			}, http.StatusOK)
-		} else {
-			utils.SendErrorResponse(w, "Payment Failed", http.StatusBadRequest, nil)
-		}
+		utils.SendErrorResponse(w, "Unauthorized: Account Does Not Belong To User", http.StatusUnprocessableEntity, nil)
 		return
 	}
 

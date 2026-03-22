@@ -96,6 +96,14 @@ func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig) (*slog.L
 		return nil, nil, err
 	}
 
+	// Create the log file explicitly with 0600 so it is owner-only regardless
+	// of the process umask. lumberjack will reuse the existing file.
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, nil, err
+	}
+	f.Close()
+
 	rotator := &lumberjack.Logger{
 		Filename:   logFile,
 		MaxSize:    rot.MaxSizeMB,

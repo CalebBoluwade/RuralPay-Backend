@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ruralpay/backend/internal/circuitbreaker"
 	"github.com/sony/gobreaker"
 	"github.com/spf13/viper"
 )
@@ -20,6 +21,7 @@ type NIBSSClient struct {
 	httpClient        *http.Client
 	circuitBreaker    *gobreaker.CircuitBreaker
 	bvnBreaker        *gobreaker.CircuitBreaker
+	mandateBreaker    *gobreaker.CircuitBreaker
 }
 
 type BVNVerifyRequest struct {
@@ -78,38 +80,15 @@ func NewNIBSSClient() *NIBSSClient {
 		bvnURL = baseURL
 	}
 
-	cbSettings := gobreaker.Settings{
-		Name:        "NIBSS-Settlement",
-		MaxRequests: 1,
-		Interval:    60 * time.Second,
-		Timeout:     30 * time.Second,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 5 && failureRatio >= 0.6
-		},
-	}
-
-	bvnBreakerSettings := gobreaker.Settings{
-		Name:        "NIBSS-BVN",
-		MaxRequests: 1,
-		Interval:    60 * time.Second,
-		Timeout:     30 * time.Second,
-		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 3 && failureRatio >= 0.6
-		},
-	}
-
 	return &NIBSSClient{
 		mandateBaseURL:    mandateURL,
 		settlementBaseURL: settlementURL,
 		bvnBaseURL:        bvnURL,
 		apiKey:            viper.GetString("nibss.api_key"),
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
-		circuitBreaker: gobreaker.NewCircuitBreaker(cbSettings),
-		bvnBreaker:     gobreaker.NewCircuitBreaker(bvnBreakerSettings),
+		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		circuitBreaker:    circuitbreaker.Get("NIBSS-Settlement", circuitbreaker.NIBSSSettlementSettings()),
+		bvnBreaker:        circuitbreaker.Get("NIBSS-BVN", circuitbreaker.NIBSSBVNSettings()),
+		mandateBreaker:    circuitbreaker.Get("NIBSS-Mandate", circuitbreaker.NIBSSMandateSettings()),
 	}
 }
 
@@ -157,40 +136,43 @@ func (c *NIBSSClient) VerifyBVN(bvn, phoneNumber string) (*BVNVerifyResponse, er
 }
 
 func (c *NIBSSClient) GetAccountMandate(bankCode, accountNumber string) (*MandateResponse, error) {
-	reqBody := MandateRequest{
-		BankCode:      bankCode,
-		AccountNumber: accountNumber,
-	}
+	result, err := c.mandateBreaker.Execute(func() (interface{}, error) {
+		reqBody := MandateRequest{BankCode: bankCode, AccountNumber: accountNumber}
+		jsonData, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request: %w", err)
+		}
 
-	jsonData, err := json.Marshal(reqBody)
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/mandate/inquiry", c.mandateBaseURL), bytes.NewBuffer(jsonData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS mandate API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS mandate API returned status %d", resp.StatusCode)
+		}
+
+		var mandateResp MandateResponse
+		if err := json.NewDecoder(resp.Body).Decode(&mandateResp); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return &mandateResp, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
-
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/mandate/inquiry", c.mandateBaseURL), bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
-	}
-
-	var mandateResp MandateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mandateResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &mandateResp, nil
+	return result.(*MandateResponse), nil
 }
 
 func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*FundsTransferSettlementResponse, error) {

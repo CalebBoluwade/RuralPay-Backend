@@ -91,6 +91,7 @@ type AirtimeDataRequest struct {
 	PaymentMode   PaymentMode `json:"paymentMode"`
 	Voucher       Voucher     `json:"voucher,omitempty"`
 	OneTimeCode   string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
+	Location      *Location   `json:"location,omitempty"`
 }
 
 // TransactionRecord represents a payment transaction

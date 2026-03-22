@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -34,6 +35,12 @@ func NewQRService(db *sql.DB, redis *redis.Client) *QRService {
 }
 
 func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantID string) (string, string, error) {
+	slog.Info("qr.generate.start")
+	if merchantID == "" {
+		slog.Error("qr.generate.error", "merchant", "Invalid Merchant")
+		return "", "", errors.New("invalid Merchant")
+	}
+
 	nonce := s.generateNonce()
 	expiryMinutes := viper.GetInt("QR_EXPIRY_MINUTES")
 	if expiryMinutes == 0 {
@@ -51,12 +58,14 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 
 	jsonData, err := json.Marshal(qrData)
 	if err != nil {
+		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 
 	qrToken := base64.URLEncoding.EncodeToString(jsonData)
 	key := fmt.Sprintf("qr:%s", qrToken)
 	if err := s.redis.Set(ctx, key, jsonData, expiryDuration).Err(); err != nil {
+		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 
@@ -64,17 +73,20 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 	slog.Info("qr.generate.emvco_built")
 	qr, err := qrcode.New(emvData, qrcode.Highest)
 	if err != nil {
+		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 
 	qrImg := qr.Image(1024)
 	qrWithLogo, err := s.addLogoToQR(qrImg)
 	if err != nil {
+		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, qrWithLogo); err != nil {
+		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 

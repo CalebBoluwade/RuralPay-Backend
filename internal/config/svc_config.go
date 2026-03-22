@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+
 	"github.com/spf13/viper"
 )
 
@@ -55,6 +56,9 @@ func init() {
 	viper.BindEnv("smtp.user", "SMTP_USER")
 	viper.BindEnv("smtp.password", "SMTP_PASSWORD")
 	viper.BindEnv("smtp.from", "SMTP_FROM")
+	viper.BindEnv("smtp.ssl", "SMTP_SSL")
+	viper.SetDefault("smtp.ssl", false)
+
 	viper.BindEnv("sms.url", "SMS_SERVICE_URL")
 	viper.BindEnv("templates.dir", "TEMPLATES_DIR")
 	viper.SetDefault("smtp.port", 587)
@@ -68,11 +72,12 @@ func init() {
 	viper.BindEnv("log.file", "LOG_FILE")
 	viper.SetDefault("log.file", "./logs/app.log")
 	viper.BindEnv("log.max_size_mb", "LOG_MAX_SIZE_MB")
-	viper.SetDefault("log.max_size_mb", 100)
+	viper.SetDefault("log.max_size_mb", 1)
 	viper.BindEnv("log.max_backups", "LOG_MAX_BACKUPS")
-	viper.SetDefault("log.max_backups", 7)
+	viper.SetDefault("log.max_backups", 1)
 	viper.BindEnv("log.max_age_days", "LOG_MAX_AGE_DAYS")
-	viper.SetDefault("log.max_age_days", 30)
+	viper.SetDefault("log.max_age_days", 1)
+
 	viper.BindEnv("app.env", "APP_ENV")
 	viper.SetDefault("app.env", "production")
 	viper.BindEnv("app.version", "APP_VERSION")

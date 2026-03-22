@@ -78,12 +78,6 @@ func (h *HardwareHSM) DecryptCardData(encryptedData string) (*CardData, error) {
 	return nil, fmt.Errorf("hardware HSM DecryptCardData not implemented")
 }
 
-// GenerateTransactionID for HardwareHSM.
-func (h *HardwareHSM) GenerateTransactionID() string {
-	// This might still be a software implementation.
-	return "hardware-tx-id"
-}
-
 // SignTransaction for HardwareHSM.
 func (h *HardwareHSM) SignTransaction(transaction *Transaction) (string, error) {
 	return "", fmt.Errorf("hardware HSM SignTransaction not implemented")

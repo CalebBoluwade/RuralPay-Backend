@@ -1,23 +1,49 @@
 {{define "content"}}
-<h2>Hi {{index .Data "senderFirstName"}}, {{.Body}}</h2>
+{{$status := index .Data "statusClass"}}
+
+{{if eq $status "received"}}
+<h2 style="font-size:22px;margin:0 0 4px;">Money just landed! 💰</h2>
+<p style="color:#4b5563;margin:0 0 20px;">Hi <strong>{{index .Data "senderFirstName"}}</strong>, you've received a payment. It's already in your account.</p>
+{{else if eq $status "sent"}}
+<h2 style="font-size:22px;margin:0 0 4px;">Payment sent ✅</h2>
+<p style="color:#4b5563;margin:0 0 20px;">Hi <strong>{{index .Data "senderFirstName"}}</strong>, your transfer went through without a hitch.</p>
+{{else if eq $status "failed"}}
+<h2 style="font-size:22px;margin:0 0 4px;">Payment failed 😕</h2>
+<p style="color:#4b5563;margin:0 0 20px;">Hi <strong>{{index .Data "senderFirstName"}}</strong>, something went wrong with your transfer. No money left your account.</p>
+{{else if eq $status "pending"}}
+<h2 style="font-size:22px;margin:0 0 4px;">Payment in progress ⏳</h2>
+<p style="color:#4b5563;margin:0 0 20px;">Hi <strong>{{index .Data "senderFirstName"}}</strong>, your transfer is being processed. We'll notify you once it's done.</p>
+{{end}}
 
 <div class="amount-box">
+  <p style="margin:0 0 2px;font-size:12px;color:#4d7c0f;font-weight:600;text-transform:uppercase;letter-spacing:.5px;">Amount</p>
   <div class="amount">{{index .Data "currency"}} {{index .Data "amount"}}</div>
+  <div style="margin-top:6px;">
+    <span class="status-badge status-{{$status}}">{{index .Data "status"}}</span>
+  </div>
 </div>
 
-<div>
+<div style="margin-bottom:24px;">
+  {{if or (eq $status "sent") (eq $status "failed") (eq $status "pending")}}
   <div class="detail-row">
-    <span class="label">Beneficiary Name</span>
+    <span class="label">To</span>
     <span class="value">{{index .Data "beneficiaryName"}}</span>
   </div>
   <div class="detail-row">
-    <span class="label">Beneficiary Account</span>
+    <span class="label">Account</span>
     <span class="value">{{index .Data "beneficiaryAcct"}}</span>
   </div>
-    <div class="detail-row">
-    <span class="label">Beneficiary Bank Name</span>
+  <div class="detail-row">
+    <span class="label">Bank</span>
     <span class="value">{{index .Data "beneficiaryBankName"}}</span>
   </div>
+  {{end}}
+  {{if eq $status "received"}}
+  <div class="detail-row">
+    <span class="label">From</span>
+    <span class="value">{{index .Data "beneficiaryName"}}</span>
+  </div>
+  {{end}}
   <div class="detail-row">
     <span class="label">Fee</span>
     <span class="value">{{index .Data "currency"}} {{index .Data "fee"}}</span>
@@ -27,18 +53,30 @@
     <span class="value">{{index .Data "reference"}}</span>
   </div>
   <div class="detail-row">
-    <span class="label">Transaction Date</span>
+    <span class="label">Date</span>
     <span class="value">{{index .Data "date"}}</span>
   </div>
   <div class="detail-row">
     <span class="label">Transaction ID</span>
-    <span class="value">{{index .Data "transactionId"}}</span>
-  </div>
-  <div class="detail-row">
-    <span class="label">Status</span>
-    <span class="value">
-      <span class="status-badge status-{{index .Data "statusClass"}}">{{index .Data "status"}}</span>
-    </span>
+    <span class="value" style="font-size:12px;word-break:break-all;">{{index .Data "transactionId"}}</span>
   </div>
 </div>
+
+{{if eq $status "failed"}}
+<div style="background:#fef2f2;border-left:4px solid #ef4444;padding:14px 18px;border-radius:4px;margin-bottom:20px;">
+  <p style="margin:0;font-size:13px;font-weight:700;color:#991b1b;">What happened?</p>
+  <p style="margin:4px 0 0;font-size:13px;color:#7f1d1d;">This can happen due to a network issue, insufficient funds, or a bank-side error. Your money was not debited.</p>
+</div>
+<div style="text-align:center;margin-bottom:8px;">
+  <a href="{{.BaseURL}}/api/v1/payments/retry?txId={{index .Data "transactionId"}}" style="display:inline-block;padding:10px 28px;background:#a3e635;color:#000;font-weight:700;font-size:14px;border-radius:6px;text-decoration:none;margin-right:8px;">🔄 Retry Payment</a>
+  <a href="{{.BaseURL}}/api/v1/feedback?transaction_id={{index .Data "transactionId"}}&email={{.Email}}&rating=no" style="display:inline-block;padding:10px 28px;background:#fee2e2;color:#991b1b;font-weight:700;font-size:14px;border-radius:6px;text-decoration:none;">🚨 Report Issue</a>
+</div>
+{{end}}
+
+{{if eq $status "pending"}}
+<div style="background:#fef9c3;border-left:4px solid #eab308;padding:14px 18px;border-radius:4px;margin-bottom:8px;">
+  <p style="margin:0;font-size:13px;font-weight:700;color:#713f12;">Still processing</p>
+  <p style="margin:4px 0 0;font-size:13px;color:#854d0e;">Most transfers complete within a few minutes. If this stays pending for over 30 minutes, please contact support.</p>
+</div>
+{{end}}
 {{end}}

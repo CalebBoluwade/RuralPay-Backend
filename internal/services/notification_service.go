@@ -17,13 +17,14 @@ import (
 )
 
 type NotificationService struct {
-	expoURL      string
+	//expoURL      string
 	smtpHost     string
 	smtpPort     int
 	smtpUser     string
 	smtpPassword string
 	smtpFrom     string
 	smtpName     string
+	smtpUseSSL   bool
 	templatesDir string
 	smsURL       string
 	httpClient   *http.Client
@@ -31,13 +32,14 @@ type NotificationService struct {
 
 func NewNotificationService() *NotificationService {
 	return &NotificationService{
-		expoURL:      "https://exp.host/--/api/v2/push/send",
+		//expoURL:      "https://exp.host/--/api/v2/push/send",
 		smtpHost:     viper.GetString("smtp.host"),
 		smtpPort:     viper.GetInt("smtp.port"),
 		smtpUser:     viper.GetString("smtp.user"),
 		smtpPassword: viper.GetString("smtp.password"),
 		smtpFrom:     viper.GetString("smtp.from"),
 		smtpName:     viper.GetString("smtp.name"),
+		smtpUseSSL:   viper.GetBool("smtp.ssl"),
 		templatesDir: viper.GetString("templates.dir"),
 		smsURL:       viper.GetString("sms.url"),
 		httpClient: &http.Client{
@@ -120,6 +122,11 @@ func (ns *NotificationService) sendPaymentNotificationEmail(payload *models.Noti
 	m.SetBody("text/html", body)
 
 	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
 	if err := d.DialAndSend(m); err != nil {
 		slog.Error("notification.email.failed", "user_id", payload.UserID, "error", err)
 		return err
@@ -167,18 +174,53 @@ func (ns *NotificationService) SendOTPEmail(email, otp, expiresIn string, notifT
 	m.SetBody("text/html", body)
 
 	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
+
 	if err := d.DialAndSend(m); err != nil {
-		slog.Error("notification.otp.failed", "error", err)
+		slog.Error("otp.notification.failed", "error", err)
 		return err
 	}
 
-	slog.Info("notification.otp.sent", "type", notifType, "email", email)
+	slog.Info("otp.notification.sent", "type", notifType, "email", email)
 	return nil
+}
+
+func (ns *NotificationService) SendFeedbackReceivedEmail(email string) {
+	if ns.smtpHost == "" || ns.smtpUser == "" {
+		slog.Warn("feedback.email.notification.skipped", "reason", "smtp_not_configured")
+	}
+
+	body, err := ns.renderTemplate("feedback.html", nil)
+	if err != nil {
+		slog.Error("notification.otp.template_failed", "error", err)
+	}
+
+	m := mail.NewMessage()
+	m.SetAddressHeader("From", ns.smtpFrom, ns.smtpName)
+	m.SetHeader("To", email)
+	m.SetHeader("Subject", "Your Feedback Received")
+	m.SetBody("text/html", body)
+
+	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
+	if err := d.DialAndSend(m); err != nil {
+		slog.Error("feedback.notification.failed", "error", err)
+	}
+
+	slog.Info("feedback.notification.sent", "email", email)
 }
 
 func (ns *NotificationService) SendOTPSmS(phoneNumber, otp, expiresIn string, notifType models.NotificationType) error {
 	if ns.smsURL == "" {
-		slog.Warn("sms.notification.otp.skipped", "reason", "smtp_not_configured")
+		slog.Warn("sms.notification.skipped", "reason", "smtp_not_configured")
 		return nil
 	}
 
@@ -300,7 +342,7 @@ func (ns *NotificationService) buildPaymentPayload(transaction *models.Transacti
 		Email:         user.Email,
 		PhoneNumber:   user.PhoneNumber,
 		ExpoPushToken: user.ExpoPushToken,
-		FeedbackURL:   fmt.Sprintf("%s/api/v1/feedback?transaction_id=%s", viper.GetString("app.base_url"), transaction.TransactionID),
+		FeedbackURL:   fmt.Sprintf("%s/api/v1/feedback?transaction_id=%s&email=%s", viper.GetString("app.base_url"), transaction.TransactionID, user.Email),
 		BaseURL:       viper.GetString("app.base_url"),
 		Data: map[string]string{
 			"transactionId":       transaction.TransactionID,
@@ -318,6 +360,135 @@ func (ns *NotificationService) buildPaymentPayload(transaction *models.Transacti
 		},
 		Preferences: getUserPreferences(user),
 	}
+}
+
+type accountEmailData struct {
+	Title       string
+	FirstName   string
+	LastName    string
+	Email       string
+	Device      string
+	Date        string
+	BaseURL     string
+	SupportURL  string
+	FeedbackURL string
+	UserID      int
+}
+
+func (ns *NotificationService) SendRegisterEmail(user *models.User) error {
+	if ns.smtpHost == "" || ns.smtpUser == "" {
+		slog.Warn("notification.email.skipped", "reason", "smtp_not_configured", "user_id", user.ID)
+		return nil
+	}
+	body, err := ns.renderTemplate("register.html", accountEmailData{
+		Title:      "Welcome to RuralPay",
+		FirstName:  user.FirstName,
+		LastName:   user.LastName,
+		Email:      user.Email,
+		Date:       time.Now().Format("02 Jan 2006, 03:04 PM"),
+		BaseURL:    viper.GetString("app.base_url"),
+		SupportURL: viper.GetString("app.support_url"),
+		UserID:     user.ID,
+	})
+	if err != nil {
+		slog.Error("notification.register.template_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	m := mail.NewMessage()
+	m.SetAddressHeader("From", ns.smtpFrom, ns.smtpName)
+	m.SetHeader("To", user.Email)
+	m.SetHeader("Subject", "Welcome to RuralPay")
+	m.SetBody("text/html", body)
+
+	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
+
+	if err := d.DialAndSend(m); err != nil {
+		slog.Error("notification.register.email_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	slog.Info("notification.register.email_sent", "user_id", user.ID)
+	return nil
+}
+
+func (ns *NotificationService) SendLoginEmail(user *models.User, device string) error {
+	if ns.smtpHost == "" || ns.smtpUser == "" {
+		slog.Warn("notification.email.skipped", "reason", "smtp_not_configured", "user_id", user.ID)
+		return nil
+	}
+	body, err := ns.renderTemplate("login.html", accountEmailData{
+		Title:      "New Login Detected",
+		FirstName:  user.FirstName,
+		Device:     device,
+		Date:       time.Now().Format("02 Jan 2006, 03:04 PM"),
+		BaseURL:    viper.GetString("app.base_url"),
+		SupportURL: viper.GetString("app.support_url"),
+		UserID:     user.ID,
+	})
+	if err != nil {
+		slog.Error("notification.login.template_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	m := mail.NewMessage()
+	m.SetAddressHeader("From", ns.smtpFrom, ns.smtpName)
+	m.SetHeader("To", user.Email)
+	m.SetHeader("Subject", "New Login to Your RuralPay Account")
+	m.SetBody("text/html", body)
+
+	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
+
+	if err := d.DialAndSend(m); err != nil {
+		slog.Error("notification.login.email_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	slog.Info("notification.login.email_sent", "user_id", user.ID)
+	return nil
+}
+
+func (ns *NotificationService) SendDeleteAccountEmail(user *models.User) error {
+	if ns.smtpHost == "" || ns.smtpUser == "" {
+		slog.Warn("notification.email.skipped", "reason", "smtp_not_configured", "user_id", user.ID)
+		return nil
+	}
+	body, err := ns.renderTemplate("delete_account.html", accountEmailData{
+		Title:      "Account Deleted",
+		FirstName:  user.FirstName,
+		Date:       time.Now().Format("02 Jan 2006, 03:04 PM"),
+		BaseURL:    viper.GetString("app.base_url"),
+		SupportURL: viper.GetString("app.support_url"),
+		UserID:     user.ID,
+	})
+	if err != nil {
+		slog.Error("notification.delete_account.template_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	m := mail.NewMessage()
+	m.SetAddressHeader("From", ns.smtpFrom, ns.smtpName)
+	m.SetHeader("To", user.Email)
+	m.SetHeader("Subject", "Your RuralPay Account Has Been Deleted")
+	m.SetBody("text/html", body)
+
+	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)
+
+	// Handle SSL Correctly
+	if ns.smtpUseSSL {
+		d.SSL = true
+	}
+	if err := d.DialAndSend(m); err != nil {
+		slog.Error("notification.delete_account.email_failed", "user_id", user.ID, "error", err)
+		return err
+	}
+	slog.Info("notification.delete_account.email_sent", "user_id", user.ID)
+	return nil
 }
 
 func getUserPreferences(user *models.User) []models.NotificationChannel {

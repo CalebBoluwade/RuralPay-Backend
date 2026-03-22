@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -49,8 +48,7 @@ type HSMInterface interface {
 	EncryptCardData(cardData *CardData) (string, error)
 	DecryptCardData(encryptedData string) (*CardData, error)
 
-	// Transaction Security
-	GenerateTransactionID() string
+	// SignTransaction Transaction Security
 	SignTransaction(transaction *Transaction) (string, error)
 	VerifyTransaction(transaction *Transaction, signature string) (bool, error)
 
@@ -400,19 +398,6 @@ func (h *SoftwareHSM) VerifyCardSignature(cardData *CardData, signature string) 
 
 	// Verify signature
 	return h.VerifySignature("card_signing", []byte(data), sigBytes)
-}
-
-// GenerateTransactionID creates a secure transaction ID
-func (h *SoftwareHSM) GenerateTransactionID() string {
-	uuid := uuid.New().String()
-	timestamp := time.Now().UnixNano()
-	random := make([]byte, 8)
-	rand.Read(random)
-
-	data := fmt.Sprintf("%s:%d:%x", uuid, timestamp, random)
-	hashed := sha256.Sum256([]byte(data))
-
-	return fmt.Sprintf("TX%x", hashed[:8])
 }
 
 // SignTransaction signs a transaction

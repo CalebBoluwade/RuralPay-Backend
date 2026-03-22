@@ -1,0 +1,1 @@
+keys/ is excluded from the image intentionally — mount those at runtime via a volume or secrets manager (e.g. AWS Secrets Manager / ECS secrets)

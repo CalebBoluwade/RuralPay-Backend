@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -52,7 +52,7 @@ func main() {
 		Compress:   true,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to Initialize logger: %v\n", err)
+		slog.Error("Failed to Initialize logger", "error", err)
 		os.Exit(1)
 	}
 	defer logCloser.Close()
@@ -118,7 +118,7 @@ func main() {
 
 	// Initialize services
 	notificationService := services.NewNotificationService()
-	authService := services.NewAuthService(db, redisClient, notificationService)
+	userService := services.NewUserService(db, redisClient, notificationService)
 	bankService := services.NewBankService()
 	accountService := services.NewAccountService(db, redisClient)
 	cardService := services.NewCardService(db, hsm)
@@ -128,9 +128,10 @@ func main() {
 
 	// Initialize unified payment handler
 	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm)
+	feedbackHandler := handlers.NewFeedbackHandler(db, notificationService)
 
 	// Initialize auth middleware with Redis
-	mW.InitAuthMiddleware(redisClient, authService, models.SessionConfig{
+	mW.InitAuthMiddleware(redisClient, userService, models.SessionConfig{
 		InactivityTTL: time.Duration(viper.GetInt("session.inactivity_ttl_minutes")) * time.Minute,
 		AbsoluteTTL:   time.Duration(viper.GetInt("session.absolute_ttl_minutes")) * time.Minute,
 	})
@@ -147,6 +148,7 @@ func main() {
 	r.Use(middleware.Heartbeat("/health"))
 	r.Use(middleware.Compress(5))
 	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(mW.RateLimiter(redisClient, mW.GlobalLimit))
 
 	//CORS
 	r.Use(cors.Handler(cors.Options{
@@ -168,9 +170,14 @@ func main() {
 		httpSwagger.URL("http://localhost:8080/swagger/doc.json"),
 	))
 
-	// Serve OpenAPI spec
+	// Serve OpenAPI spec (hardcoded path — not derived from request input)
+	openAPIPath, err := filepath.Abs("./api/openapi.yaml")
+	if err != nil {
+		slog.Error("server.openapi.path_resolve_failed", "error", err)
+		os.Exit(1)
+	}
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./api/openapi.yaml")
+		http.ServeFile(w, r, openAPIPath)
 	})
 
 	// Static file server for bank logos
@@ -184,32 +191,51 @@ func main() {
 		})
 
 		// Public endpoints (no auth required)
-		r.Post("/auth/register", authService.Register)
-		r.Post("/auth/login", authService.Login)
-		r.Post("/auth/refresh", authService.RefreshToken)
-		r.Post("/auth/forgot-password", authService.ForgotPassword)
-		r.Post("/auth/reset-password", authService.ResetPassword)
+
+		// Strict rate limit: 5 req / 15 min — login, password reset
+		r.Group(func(r chi.Router) {
+			r.Use(mW.RateLimiter(redisClient, mW.AuthStrict))
+			r.Post("/auth/login", userService.UserLogin)
+			r.Post("/auth/forgot-password", userService.ForgotPassword)
+			r.Post("/auth/reset-password", userService.ResetPassword)
+		})
+
+		// General rate limit: 10 req / 10 min — register, refresh, OTP
+		r.Group(func(r chi.Router) {
+			r.Use(mW.RateLimiter(redisClient, mW.AuthGeneral))
+			r.Post("/auth", userService.RegisterNewUser)
+			r.Put("/auth", userService.EditUserProfile)
+			r.Post("/auth/refresh", userService.RefreshToken)
+			r.Post("/account/send-bvn-otp", accountService.GenerateBVNOTP)
+			r.Post("/account/validate-bvn-otp", accountService.ValidateBVNOTP)
+		})
+
 		r.Get("/banks", bankService.GetAllBanks)
 
-		r.Post("/account/send-bvn-otp", accountService.GenerateBVNOTP)
-		r.Post("/account/validate-bvn-otp", accountService.ValidateBVNOTP)
+		// Feedback endpoints (public — clicked from email links)
+		r.Get("/feedback", feedbackHandler.HandleTransactionRating)
+		r.Get("/feedback/referral", feedbackHandler.HandleReferralSource)
+		r.Get("/feedback/deletion-reason", feedbackHandler.HandleDeletionReason)
+		r.Get("/feedback/confirm-login", feedbackHandler.HandleConfirmLogin)
 
 		// Protected endpoints (auth required)
 		r.Group(func(r chi.Router) {
 			r.Use(mW.AuthSessionMiddleware)
 
-			r.Get("/auth/account", authService.GetUserAccount)
-			r.Post("/auth/logout", authService.Logout)
+			r.Delete("/auth", userService.DeleteUserProfile)
+			r.Get("/auth/account", userService.GetUserAccount)
+			r.Post("/auth/logout", userService.LogoutUser)
 			r.Post("/account/send-otp", accountService.GenerateUserOTP)
 
 			// Account endpoints
 			r.Post("/account/link", accountService.LinkAccount)
-			//r.Post("/account/unlink", accountService.UnlinkAccount)
+			r.Post("/account/unlink/{accountNumber}", accountService.UnlinkAccount)
 			r.Get("/account/name-enquiry", accountService.AccountNameEnquiry)
 			r.Get("/account/balance-enquiry", accountService.AccountBalanceEnquiry)
 			r.Put("/account/limits", accountService.UpdateUserLimits)
 			r.Get("/account/virtual-account", accountService.GetVirtualAccount)
 			r.Get("/account/beneficiaries", accountService.GetBeneficiaries)
+			r.Get("/account/notifications", accountService.GetUserNotifications)
 
 			// QR endpoints
 			r.Post("/account/qr", accountService.GenerateQR)
@@ -222,9 +248,8 @@ func main() {
 			r.Post("/payments", paymentHandler.HandlePayment)
 
 			// Transaction Query endpoints
-			r.Get("/transaction", transactionQueryService.ListTransactions)
+			r.Get("/transaction", transactionQueryService.GetRecentTransactions)
 			r.Get("/transaction/{txId}", transactionQueryService.GetTransaction)
-			r.Get("/transaction/recent", transactionQueryService.GetRecentTransactions)
 
 			// Card Endpoints
 			r.Get("/card/bins", cardService.QueryCardBin)
@@ -240,9 +265,11 @@ func main() {
 			merchantRoute := "/merchant"
 
 			// Merchant endpoints
-			r.Post(merchantRoute, merchantService.OnboardMerchant)
-			r.Put(merchantRoute, merchantService.UpdateMerchant)
 			r.Get(merchantRoute, merchantService.GetMerchantData)
+			r.Post(merchantRoute, merchantService.OnboardMerchant)
+
+			r.Patch("/merchant/account/{accountNumber}", merchantService.UpdateMerchantBusinessAccount)
+			r.Put(merchantRoute, merchantService.UpdateMerchant)
 			r.Get("/merchant/list", merchantService.ListMerchants)
 			r.Put("/merchant/status", merchantService.UpdateMerchantStatus)
 		})

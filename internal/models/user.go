@@ -17,30 +17,30 @@ type SessionConfig struct {
 // DeviceInfo represents device information for login
 // @Description Device information structure
 type DeviceInfo struct {
-	Platform         string `json:"os" validate:"required,oneof=iOS iPadOS Android web" example:"iOS"` // Device OS platform
-	Model            string `json:"model" validate:"required" example:"iPhone 12"`                     // Device model
-	OSVersion        string `json:"osVersion" validate:"required" example:"iOS 14.0"`                  // Device OS version
-	IsPhysicalDevice bool   `json:"isPhysicalDevice" example:"true"`                                   // Whether the device is physical or an emulator
+	Platform         string `json:"os" validate:"required" example:"iOS"`             // Device OS platform ,oneof=iOS iPadOS Android web
+	Model            string `json:"model" validate:"required" example:"iPhone 12"`    // Device model
+	OSVersion        string `json:"osVersion" validate:"required" example:"iOS 14.0"` // Device OS version
+	IsPhysicalDevice bool   `json:"isPhysicalDevice" example:"true"`                  // Whether the device is physical or an emulator
 }
 
 // LoginRequest represents the login request payload
 // @Description Login request structure
 type LoginRequest struct {
-	Identifier string     `json:"identifier" validate:"required" example:"+2348012345678"`  // User phone number, email, or username
-	Password   string     `json:"password" validate:"required,min=6" example:"password123"` // User password
-	DeviceInfo DeviceInfo `json:"deviceInfo" validate:"required"`                           // Device information for login
+	Identifier string     `json:"identifier" validate:"required,max=254" example:"+2348012345678"` // User phone number, email, or username
+	Password   string     `json:"password" validate:"required,min=6,max=72"`                      // User password
+	DeviceInfo DeviceInfo `json:"deviceInfo" validate:"required"`                             // Device information for login
 }
 
 // RegisterRequest represents the registration request payload
 // @Description Registration request structure
 type RegisterRequest struct {
-	Email         string `json:"Email" validate:"required,email" example:"user@example.com"`                        // User email address
-	Username      string `json:"Username" validate:"required,min=3" example:"johndoe"`                              // Username
-	Password      string `json:"Password" validate:"required,min=6" example:"password123"`                          // User password
-	FirstName     string `json:"FirstName" validate:"required,min=2" example:"John"`                                // User first name
-	LastName      string `json:"LastName" validate:"required,min=2" example:"Doe"`                                  // User last name
-	BVN           string `json:"BVN" validate:"required,len=11" example:"12345678901"`                              // Bank Verification Number
-	PhoneNumber   string `json:"PhoneNumber" validate:"required" example:"+2348012345678"`                          // Phone number
+	Email         string `json:"Email" validate:"required,email,max=254" example:"user@example.com"`                  // User email address
+	Username      string `json:"Username" validate:"required,min=3,max=30,alphanum" example:"johndoe"`               // Username
+	Password      string `json:"Password" validate:"required,min=6,max=72"`                                         // User password
+	FirstName     string `json:"FirstName" validate:"required,min=2,max=50" example:"John"`                        // User first name
+	LastName      string `json:"LastName" validate:"required,min=2,max=50" example:"Doe"`                          // User last name
+	BVN           string `json:"BVN" validate:"required,len=11,numeric" example:"12345678901"`                     // Bank Verification Number
+	PhoneNumber   string `json:"PhoneNumber" validate:"required,min=10,max=15" example:"+2348012345678"`            // Phone number
 	ExpoPushToken string `json:"pushToken" validate:"required" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 }
 

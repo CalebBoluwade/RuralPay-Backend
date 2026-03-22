@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/spf13/viper"
@@ -26,8 +27,8 @@ func InitRedis() *redis.Client {
 
 	ctx := context.Background()
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		slog.Error("Redis Connection Failed, Continuing without Redis: %v", err)
-		return nil
+		slog.Error("Failed to Open Redis Database", "error", err)
+		os.Exit(1)
 	}
 
 	slog.Info("Redis Connection Established")

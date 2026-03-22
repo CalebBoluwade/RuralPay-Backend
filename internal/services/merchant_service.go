@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
@@ -51,7 +52,7 @@ func NewMerchantService(db *sql.DB) *MerchantService {
 // @Failure 409 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
-// @Router /merchants [post]
+// @Router /merchant [post]
 func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID")
 	if userID == nil {
@@ -97,9 +98,9 @@ func (s *MerchantService) OnboardMerchant(w http.ResponseWriter, r *http.Request
 }
 
 type TransactionStatusBreakdown struct {
-	Status          string `json:"status"`
+	Status           string `json:"status"`
 	TransactionCount int64  `json:"transactionCount"`
-	TotalAmount     int64  `json:"totalAmount"`
+	TotalAmount      int64  `json:"totalAmount"`
 }
 
 type MerchantStats struct {
@@ -113,6 +114,43 @@ type MerchantStats struct {
 }
 
 // GetMerchant godoc
+// @Summary Update Merchant Business Account
+// @Description Retrieve merchant data and stats for the authenticated user
+// @Tags Merchants
+// @Produce json
+// @Failure 200 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Router /merchant/account [get]
+func (s *MerchantService) UpdateMerchantBusinessAccount(w http.ResponseWriter, r *http.Request) {
+	_, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+
+	account_id := chi.URLParam(r, "accountNumber")
+
+	result, err := s.db.ExecContext(r.Context(), `
+		UPDATE merchants 
+		SET account_id = $2
+		WHERE id = $1
+		`, merchantID, account_id)
+
+	if err != nil {
+		slog.Error("merchant.update.business_account.failed", "error", err)
+		utils.SendErrorResponse(w, "Internal server error", http.StatusInternalServerError, err)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		utils.SendErrorResponse(w, "Merchant not found", http.StatusNotFound, nil)
+		return
+	}
+
+	utils.SendSuccessResponse(w, "Business Account Updated Successfully", nil, http.StatusOK)
+}
+
+// GetMerchant godoc
 // @Summary Get merchant details
 // @Description Retrieve merchant data and stats for the authenticated user
 // @Tags Merchants
@@ -122,7 +160,7 @@ type MerchantStats struct {
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
-// @Router /merchants [get]
+// @Router /merchant [get]
 func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request) {
 	_, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
@@ -187,7 +225,7 @@ func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
-// @Router /merchants [put]
+// @Router /merchant [put]
 func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("userID")
 	if userID == nil {
@@ -243,7 +281,7 @@ func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request)
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
-// @Router /merchants/status [put]
+// @Router /merchant/status [put]
 func (s *MerchantService) UpdateMerchantStatus(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MerchantID int    `json:"merchantId" validate:"required"`
@@ -286,7 +324,7 @@ func (s *MerchantService) UpdateMerchantStatus(w http.ResponseWriter, r *http.Re
 // @Success 200 {array} models.Merchant
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
-// @Router /merchants [get]
+// @Router /merchant/list [get]
 func (s *MerchantService) ListMerchants(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 

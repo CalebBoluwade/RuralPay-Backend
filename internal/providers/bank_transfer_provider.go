@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"net/http"
 
@@ -42,8 +45,30 @@ func (p *BankTransferPaymentProvider) GetPaymentMode() models.PaymentMode {
 	return models.PaymentModeBankTransfer
 }
 
+var accountNumberRe = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
+func (p *BankTransferPaymentProvider) sanitizeRequest(req *models.PaymentRequest) error {
+	req.FromAccount = accountNumberRe.ReplaceAllString(strings.TrimSpace(req.FromAccount), "")
+	req.BeneficiaryAccountNumber = accountNumberRe.ReplaceAllString(strings.TrimSpace(req.BeneficiaryAccountNumber), "")
+	req.Narration = strings.TrimSpace(req.Narration)
+	if utf8.RuneCountInString(req.Narration) > 100 {
+		return errors.New("narration must not exceed 100 characters")
+	}
+	if len(req.FromAccount) > 20 {
+		return errors.New("source account number too long")
+	}
+	if len(req.BeneficiaryAccountNumber) > 20 {
+		return errors.New("destination account number too long")
+	}
+	return nil
+}
+
 func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
 	slog.Info("bank_transfer.validate", "from", req.FromAccount, "to", req.BeneficiaryAccountNumber, "amount", req.Amount, "type", req.TxType)
+
+	if err := p.sanitizeRequest(req); err != nil {
+		return err
+	}
 
 	isValid2FA := p.acctService.ValidateUserOTP(req.UserID, req.OneTimeCode, "2FA-CODE")
 	if !isValid2FA {

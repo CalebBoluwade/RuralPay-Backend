@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -30,7 +31,7 @@ func GetConfig() *DBConfig {
 	viper.SetDefault("database.host", "localhost")
 	viper.SetDefault("database.port", "5432")
 	viper.SetDefault("database.user", "postgres")
-	viper.SetDefault("database.password", "password")
+	viper.SetDefault("database.password", "")
 	viper.SetDefault("database.name", "ruralpay")
 	viper.SetDefault("database.ssl_mode", "disable")
 	viper.SetDefault("database.max_open_conns", 25)
@@ -50,6 +51,27 @@ func GetConfig() *DBConfig {
 	}
 }
 
+const (
+	maxRetries    = 5
+	initialDelay  = 2 * time.Second
+	maxDelay      = 30 * time.Second
+)
+
+func connectWithRetry(database *sql.DB) error {
+	delay := initialDelay
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := database.Ping(); err == nil {
+			return nil
+		} else if attempt == maxRetries {
+			return fmt.Errorf("database unreachable after %d attempts: %w", maxRetries, err)
+		}
+		slog.Warn("Database ping failed, retrying", "attempt", attempt, "backoff", delay)
+		time.Sleep(delay)
+		delay = min(delay*2, maxDelay)
+	}
+	return nil
+}
+
 // InitDB initializes the database connection
 func InitDB() (*sql.DB, error) {
 	config := GetConfig()
@@ -62,12 +84,13 @@ func InitDB() (*sql.DB, error) {
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("error opening database: %w", err)
+		slog.Error("Failed to open database", "error", err)
+		os.Exit(1)
 	}
 
-	// Test connection
-	if err = db.Ping(); err != nil {
-		return nil, fmt.Errorf("error connecting to database: %w", err)
+	if err = connectWithRetry(db); err != nil {
+		slog.Error("Failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 
 	// Configure connection pool

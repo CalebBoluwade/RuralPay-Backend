@@ -30,7 +30,7 @@ func TestAuthService_Register(t *testing.T) {
 	viper.Set("jwt.expiry_minutes", 10)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	service := NewAuthService(db, redisClient, nil)
+	service := NewUserService(db, redisClient, nil)
 
 	t.Run("successful registration", func(t *testing.T) {
 		req := models.RegisterRequest{
@@ -48,7 +48,7 @@ func TestAuthService_Register(t *testing.T) {
 		r := httptest.NewRequest("POST", "/auth/register", bytes.NewBuffer(body))
 		w := httptest.NewRecorder()
 
-		service.Register(w, r)
+		service.RegisterNewUser(w, r)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var response models.AuthResponse
@@ -61,7 +61,7 @@ func TestAuthService_Register(t *testing.T) {
 		r := httptest.NewRequest("POST", "/auth/register", bytes.NewBuffer([]byte("invalid")))
 		w := httptest.NewRecorder()
 
-		service.Register(w, r)
+		service.RegisterNewUser(w, r)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
@@ -76,7 +76,7 @@ func TestAuthService_Login(t *testing.T) {
 	viper.Set("jwt.expiry_minutes", 10)
 
 	redisClient := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	service := NewAuthService(db, redisClient, nil)
+	service := NewUserService(db, redisClient, nil)
 
 	t.Run("successful login", func(t *testing.T) {
 		hashedPassword, _ := hashPassword("password123")
@@ -95,7 +95,7 @@ func TestAuthService_Login(t *testing.T) {
 		r := httptest.NewRequest("POST", "/auth/login", bytes.NewBuffer(body))
 		w := httptest.NewRecorder()
 
-		service.Login(w, r)
+		service.UserLogin(w, r)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		var response models.AuthResponse
@@ -117,7 +117,7 @@ func TestAuthService_Login(t *testing.T) {
 		r := httptest.NewRequest("POST", "/auth/login", bytes.NewBuffer(body))
 		w := httptest.NewRecorder()
 
-		service.Login(w, r)
+		service.UserLogin(w, r)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 	})

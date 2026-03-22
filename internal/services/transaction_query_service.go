@@ -2,6 +2,7 @@ package services
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,40 @@ import (
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
 )
+
+const (
+	defaultPageLimit = 20
+	maxPageLimit     = 100
+)
+
+type txFilters struct {
+	Status    string
+	StartDate string
+	EndDate   string
+}
+
+type PaginatedTransactions struct {
+	Transactions []TransactionHistory `json:"transactions"`
+	Total        int                  `json:"total"`
+	Page         int                  `json:"page"`
+	Limit        int                  `json:"limit"`
+	HasMore      bool                 `json:"hasMore"`
+}
+
+func parsePagination(r *http.Request) (page, limit int) {
+	page = 1
+	limit = defaultPageLimit
+	if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 0 {
+		page = p
+	}
+	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
+		if l > maxPageLimit {
+			l = maxPageLimit
+		}
+		limit = l
+	}
+	return
+}
 
 type TransactionQueryService struct {
 	db        *sql.DB
@@ -27,10 +62,10 @@ type TransactionHistory struct {
 	Amount         int64              `json:"amount"`
 	Currency       string             `json:"currency"`
 	PaymentMode    models.PaymentMode `json:"paymentMode"`
-	Fee            int64              `json:"fee"`
+	Fee            int64              `json:"fee,omitempty"`
 	TxType         string             `json:"txType"`
 	Status         string             `json:"status"`
-	Narration      string             `json:"narration"`
+	Narration      string             `json:"narration,omitempty"`
 	CreatedAt      time.Time          `json:"transactionDate"`
 	Profit         *float64           `json:"profit,omitempty"`
 	SettlementDate *time.Time         `json:"settlementDate,omitempty"`
@@ -43,23 +78,88 @@ func NewTransactionQueryService(db *sql.DB) *TransactionQueryService {
 	}
 }
 
+func (s *TransactionQueryService) fetchTransaction(txID string, userID int) (*TransactionHistory, error) {
+	tx := &TransactionHistory{}
+	var amountStr, feeStr string
+	err := s.db.QueryRow(`
+		SELECT transaction_id, COALESCE(debit_id, ''), COALESCE(credit_id, ''), amount::text, currency,
+		       COALESCE(type, 'DEBIT'), COALESCE(payment_mode, 'CARD'), fee::text, status, COALESCE(narration, ''), created_at
+		FROM transactions
+		WHERE transaction_id = $1 AND user_id = $2
+	`, txID, userID).Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("transaction.fetch.db_error", "tx_id", txID, "error", err)
+		}
+		return nil, err
+	}
+	amount, _ := strconv.ParseFloat(amountStr, 64)
+	tx.Amount = int64(amount)
+	fee, _ := strconv.ParseFloat(feeStr, 64)
+	tx.Fee = int64(fee)
+	return tx, nil
+}
+
+func (s *TransactionQueryService) fetchMerchantTransaction(txID string, merchantID int) (*TransactionHistory, error) {
+	tx := &TransactionHistory{}
+	var amountStr, feeStr, profitStr string
+	var settlementDate sql.NullTime
+	err := s.db.QueryRow(`
+		SELECT t.transaction_id, COALESCE(t.debit_id, ''), COALESCE(t.credit_id, ''), t.amount::text, t.currency,
+		       COALESCE(t.type, 'CREDIT'), COALESCE(t.payment_mode, 'CARD'), t.fee::text, t.status, COALESCE(t.narration, ''), t.created_at,
+		       (t.amount * m.commission_rate / 100)::text,
+		       CASE m.settlement_cycle
+		           WHEN 'DAILY'   THEN t.created_at + INTERVAL '1 day'
+		           WHEN 'WEEKLY'  THEN t.created_at + INTERVAL '7 days'
+		           WHEN 'MONTHLY' THEN t.created_at + INTERVAL '1 month'
+		       END
+		FROM transactions t
+		JOIN merchants m ON m.account_id = t.credit_id
+		WHERE t.transaction_id = $1 AND m.id = $2
+	`, txID, merchantID).Scan(&tx.TxID, &tx.FromAccount, &tx.ToAccount, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt, &profitStr, &settlementDate)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("transaction.fetch_merchant.db_error", "tx_id", txID, "error", err)
+		}
+		return nil, err
+	}
+	amount, _ := strconv.ParseFloat(amountStr, 64)
+	tx.Amount = int64(amount)
+	fee, _ := strconv.ParseFloat(feeStr, 64)
+	tx.Fee = int64(fee)
+	if profit, err := strconv.ParseFloat(profitStr, 64); err == nil {
+		tx.Profit = &profit
+	}
+	if settlementDate.Valid {
+		tx.SettlementDate = &settlementDate.Time
+	}
+	return tx, nil
+}
+
 // GetTransaction retrieves a specific transaction
 // @Summary Get transaction by ID
 // @Description Retrieve a transaction by its ID
-// @Tags transactions
+// @Tags Transactions
 // @Produce json
 // @Param txId path string true "Transaction ID"
-// @Success 200 {object} TransactionDTO
-// @Failure 404 {object} services.ErrorResponse
-// @Failure 500 {object} services.ErrorResponse
-// @Router /transactions/{txId} [get]
+// @Success 200 {object} TransactionHistory
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
 // @Security BearerAuth
+// @Router /transaction/{txId} [get]
 func (s *TransactionQueryService) GetTransaction(w http.ResponseWriter, r *http.Request) {
+	userID, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 	txID := chi.URLParam(r, "txId")
 
-	tx, err := s.fetchTransaction(txID)
+	var tx *TransactionHistory
+	var err error
+	if merchantID != 0 {
+		tx, err = s.fetchMerchantTransaction(txID, merchantID)
+	} else {
+		tx, err = s.fetchTransaction(txID, userID)
+	}
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			utils.SendErrorResponse(w, "Transaction Not Found", http.StatusNotFound, nil)
 		} else {
 			slog.Error("transaction.get.failed", "tx_id", txID, "error", err)
@@ -71,216 +171,103 @@ func (s *TransactionQueryService) GetTransaction(w http.ResponseWriter, r *http.
 	utils.SendSuccessResponse(w, "Transaction Fetched Successfully", tx, http.StatusOK)
 }
 
-// ListTransactions retrieves transactions with optional filters
-// @Summary List transactions
-// @Description Get a list of transactions with optional filtering
-// @Tags transactions
+// GetRecentTransactions retrieves recent transactions with optional filters
+// @Summary Get Transactions
+// @Description Get a list of recent transactions for the authenticated user with optional filtering
+// @Tags Transactions
 // @Produce json
-// @Param id query string false "Filter by transaction ID"
-// @Param cardId query string false "Filter by card ID"
 // @Param status query string false "Filter by status"
 // @Param startDate query string false "Filter by start date (RFC3339 format)"
 // @Param endDate query string false "Filter by end date (RFC3339 format)"
-// @Success 200 {object} object{transactions=[]TransactionDTO,count=int}
-// @Failure 500 {object} services.ErrorResponse
-// @Router /transactions [get]
+// @Param page query int false "Page Number"
+// @Param limit query int false "Page Size, Number of transactions to return (default: 10, max: 100)"
+// @Success 200 {array} PaginatedTransactions
+// @Failure 400 {object} map[string]string
+// @Failure 401 {object} map[string]string
+// @Failure 500 {object} map[string]string
 // @Security BearerAuth
-func (s *TransactionQueryService) ListTransactions(w http.ResponseWriter, r *http.Request) {
-	if txID := r.URL.Query().Get("id"); txID != "" {
-		tx, err := s.fetchTransaction(txID)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				utils.SendErrorResponse(w, "Transaction not found", http.StatusNotFound, nil)
-			} else {
-				slog.Error("transaction.list.fetch_failed", "tx_id", txID, "error", err)
-				utils.SendErrorResponse(w, "Failed to fetch transaction", http.StatusFailedDependency, nil)
-			}
-			return
-		}
-
-		utils.SendSuccessResponse(w, "Transaction fetched successfully", tx, http.StatusOK)
-
-		return
-	}
-
-	cardID := r.URL.Query().Get("cardId")
-	status := r.URL.Query().Get("status")
-	startDate := r.URL.Query().Get("startDate")
-	endDate := r.URL.Query().Get("endDate")
-	limit := 50
-
-	transactions, err := s.fetchTransactions(cardID, status, startDate, endDate, limit)
-	if err != nil {
-		slog.Error("transaction.list.query_failed", "error", err)
-		utils.SendErrorResponse(w, "Failed to fetch transactions", http.StatusFailedDependency, nil)
-		return
-	}
-
-	utils.SendSuccessResponse(w, "recent transactions fetched successfully", transactions, http.StatusOK)
-}
-
-// GetRecentTransactions retrieves recent transactions
-// @Summary Get recent transactions
-// @Description Get a list of recent transactions for the authenticated user
-// @Tags transactions
-// @Produce json
-// @Param limit query int false "Number of transactions to return (default: 10, max: 100)"
-// @Success 200 {array} TransactionDTO
-// @Failure 400 {object} services.ErrorResponse
-// @Failure 401 {object} services.ErrorResponse
-// @Failure 500 {object} services.ErrorResponse
-// @Router /transactions/recent [get]
-// @Security BearerAuth
+// @Router /transaction/recent [get]
 func (s *TransactionQueryService) GetRecentTransactions(w http.ResponseWriter, r *http.Request) {
 	userID, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
-	var req struct {
-		Limit int `validate:"omitempty,min=1,max=100"`
-	}
-	req.Limit = 10
-
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil {
-			req.Limit = l
-		}
+	page, limit := parsePagination(r)
+	filters := txFilters{
+		Status:    r.URL.Query().Get("status"),
+		StartDate: r.URL.Query().Get("startDate"),
+		EndDate:   r.URL.Query().Get("endDate"),
 	}
 
-	if err := s.validator.ValidateStruct(&req); err != nil {
-		slog.Warn("transaction.recent.validation_failed", "error", err)
-		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
-		return
-	}
-
-	var transactions []TransactionHistory
+	var results *PaginatedTransactions
 	var err error
 	if merchantID == 0 {
-		transactions, err = s.fetchRecentUserTransactions((userID), req.Limit)
+		results, err = s.fetchRecentUserTransactions(userID, filters, page, limit)
 	} else {
-		transactions, err = s.fetchRecentMerchantTransactions((merchantID), req.Limit)
+		results, err = s.fetchRecentMerchantTransactions(merchantID, filters, page, limit)
 	}
-
 	if err != nil {
-		utils.SendErrorResponse(w, "Failed to fetch recent transactions", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, "Failed to Fetch Transactions", http.StatusFailedDependency, nil)
 		return
 	}
 
-	utils.SendSuccessResponse(w, "recent transactions fetched successfully", transactions, http.StatusOK)
+	utils.SendSuccessResponse(w, "Transactions Fetched Successfully", results, http.StatusOK)
 }
 
-func (s *TransactionQueryService) fetchTransaction(txID string) (*TransactionHistory, error) {
-	tx := &TransactionHistory{}
-	var amountStr, feeStr string
-	err := s.db.QueryRow(`
-		SELECT transaction_id, debit_id, credit_id, amount::text, currency, 
-		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee::text, status, COALESCE(narration, ''), created_at
-		FROM transactions
-		WHERE transaction_id = $1
-	`, txID).Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt)
-
-	if err != nil {
-		slog.Error("transaction.fetch.db_error", "tx_id", txID, "error", err)
-		return nil, err
-	}
-
-	amount, _ := strconv.ParseFloat(amountStr, 64)
-	tx.Amount = int64(amount)
-	fee, _ := strconv.ParseFloat(feeStr, 64)
-	tx.Fee = int64(fee)
-	return tx, nil
-}
-
-func (s *TransactionQueryService) fetchTransactions(cardID, status, startDate, endDate string, limit int) ([]TransactionHistory, error) {
-	var conditions []string
+func buildFilterClauses(argIdx int, f txFilters, col string) ([]string, []any) {
+	var clauses []string
 	var args []any
-	argIndex := 1
-
-	baseQuery := `
-		SELECT transaction_id, debit_id, credit_id, amount, currency, 
-		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee, status, COALESCE(narration, ''), created_at
-		FROM transactions
-	`
-
-	if cardID != "" {
-		conditions = append(conditions, fmt.Sprintf("(debit_id = $%d OR credit_id = $%d)", argIndex, argIndex))
-		args = append(args, cardID)
-		argIndex++
+	if f.Status != "" {
+		clauses = append(clauses, fmt.Sprintf("%sstatus = $%d", col, argIdx))
+		args = append(args, strings.ToUpper(f.Status))
+		argIdx++
 	}
-
-	if status != "" {
-		conditions = append(conditions, fmt.Sprintf("status = $%d", argIndex))
-		args = append(args, status)
-		argIndex++
-	}
-
-	if startDate != "" {
-		if parsedDate, err := time.Parse(time.RFC3339, startDate); err == nil {
-			conditions = append(conditions, fmt.Sprintf("created_at >= $%d", argIndex))
-			args = append(args, parsedDate)
-			argIndex++
+	if f.StartDate != "" {
+		if t, err := time.Parse(time.RFC3339, f.StartDate); err == nil {
+			clauses = append(clauses, fmt.Sprintf("%screated_at >= $%d", col, argIdx))
+			args = append(args, t)
+			argIdx++
 		}
 	}
-
-	if endDate != "" {
-		if parsedDate, err := time.Parse(time.RFC3339, endDate); err == nil {
-			conditions = append(conditions, fmt.Sprintf("created_at <= $%d", argIndex))
-			args = append(args, parsedDate)
-			argIndex++
+	if f.EndDate != "" {
+		if t, err := time.Parse(time.RFC3339, f.EndDate); err == nil {
+			clauses = append(clauses, fmt.Sprintf("%screated_at <= $%d", col, argIdx))
+			args = append(args, t)
 		}
 	}
+	return clauses, args
+}
 
-	query := baseQuery
-	if len(conditions) > 0 {
-		query += " WHERE " + strings.Join(conditions, " AND ")
+func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, f txFilters, page, limit int) (*PaginatedTransactions, error) {
+	args := []any{userID}
+	clauses, filterArgs := buildFilterClauses(2, f, "")
+	args = append(args, filterArgs...)
+	argIdx := 2 + len(filterArgs)
+
+	offset := (page - 1) * limit
+	args = append(args, limit, offset)
+
+	const base = "SELECT transaction_id, COALESCE(debit_id, ''), COALESCE(credit_id, ''), amount::text, currency," +
+		" COALESCE(type, 'DEBIT'), COALESCE(payment_mode, 'CARD'), fee::text, status, COALESCE(narration, ''), created_at," +
+		" COUNT(*) OVER() AS total_count FROM transactions WHERE user_id = $1"
+	query := base + " AND " + strings.Join(clauses, " AND ")
+	if len(clauses) == 0 {
+		query = base
 	}
-
-	query += " ORDER BY created_at DESC"
-	query += fmt.Sprintf(" LIMIT $%d", argIndex)
-	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 
 	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		slog.Error("transaction.fetch_list.query_failed", "error", err)
-		return nil, err
-	}
-	defer rows.Close()
 
-	var transactions []TransactionHistory
-	for rows.Next() {
-		tx := TransactionHistory{}
-		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &tx.Amount, &tx.Currency, &tx.TxType, &tx.PaymentMode, &tx.Fee, &tx.Status, &tx.Narration, &tx.CreatedAt)
-		if err != nil {
-			slog.Error("transaction.fetch_list.scan_failed", "error", err)
-			return nil, err
-		}
-		transactions = append(transactions, tx)
-	}
-
-	return transactions, nil
-}
-
-func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, limit int) ([]TransactionHistory, error) {
-	query := `
-		SELECT transaction_id, COALESCE(debit_id, '') as debit_id, COALESCE(credit_id, '') as credit_id, amount::text, currency, 
-		       COALESCE(type, 'DEBIT') as type, COALESCE(payment_mode, 'CARD') as payment_mode, fee::text, status, COALESCE(narration, ''), created_at
-		FROM transactions
-		WHERE user_id = $1::integer
-		ORDER BY created_at DESC
-		LIMIT $2
-	`
-
-	rows, err := s.db.Query(query, userID, limit)
 	if err != nil {
 		slog.Error("transaction.fetch_user_recent.query_failed", "user_id", userID, "error", err)
 		return nil, err
 	}
 	defer rows.Close()
 
+	var total int
 	var transactions []TransactionHistory
 	for rows.Next() {
-		tx := TransactionHistory{}
+		var tx TransactionHistory
 		var amountStr, feeStr string
-		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt)
-		if err != nil {
+		if err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.ToAccount, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt, &total); err != nil {
 			slog.Error("transaction.fetch_user_recent.scan_failed", "user_id", userID, "error", err)
 			return nil, err
 		}
@@ -291,50 +278,55 @@ func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, limit 
 		transactions = append(transactions, tx)
 	}
 
-	return transactions, nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if transactions == nil {
+		transactions = []TransactionHistory{}
+	}
+	return &PaginatedTransactions{
+		Transactions: transactions,
+		Total:        total,
+		Page:         page,
+		Limit:        limit,
+		HasMore:      page*limit < total,
+	}, nil
 }
 
-func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int, limit int) ([]TransactionHistory, error) {
-	query := `
-		SELECT
-			t.transaction_id,
-			COALESCE(t.debit_id, '') AS debit_id,
-			COALESCE(t.credit_id, '') AS credit_id,
-			t.amount::text,
-			t.currency,
-			COALESCE(t.type, 'DEBIT') AS type,
-			COALESCE(t.payment_mode, 'CARD') AS payment_mode,
-			t.fee::text,
-			t.status,
-			COALESCE(t.narration, ''),
-			t.created_at,
-			(t.amount * m.commission_rate / 100)::text AS profit,
-			CASE m.settlement_cycle
-				WHEN 'DAILY'   THEN t.created_at + INTERVAL '1 day'
-				WHEN 'WEEKLY'  THEN t.created_at + INTERVAL '7 days'
-				WHEN 'MONTHLY' THEN t.created_at + INTERVAL '1 month'
-			END AS settlement_date
-		FROM transactions t
-		JOIN merchants m ON m.account_id = t.credit_id
-		WHERE m.id = $1::integer
-		ORDER BY t.created_at DESC
-		LIMIT $2
-	`
+func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int, f txFilters, page, limit int) (*PaginatedTransactions, error) {
+	args := []any{merchantID}
+	clauses, filterArgs := buildFilterClauses(2, f, "t.")
+	args = append(args, filterArgs...)
+	argIdx := 2 + len(filterArgs)
 
-	rows, err := s.db.Query(query, merchantID, limit)
+	offset := (page - 1) * limit
+	args = append(args, limit, offset)
+
+	const base = "SELECT t.transaction_id, COALESCE(t.debit_id, ''), COALESCE(t.credit_id, ''), t.amount::text, t.currency," +
+		" COALESCE(t.type, 'CREDIT'), COALESCE(t.payment_mode, 'CARD'), t.fee::text, t.status, COALESCE(t.narration, ''), t.created_at," +
+		" (t.amount * m.commission_rate / 100)::text," +
+		" CASE m.settlement_cycle WHEN 'DAILY' THEN t.created_at + INTERVAL '1 day' WHEN 'WEEKLY' THEN t.created_at + INTERVAL '7 days' WHEN 'MONTHLY' THEN t.created_at + INTERVAL '1 month' END," +
+		" COUNT(*) OVER() AS total_count FROM transactions t JOIN merchants m ON m.account_id = t.credit_id WHERE m.id = $1"
+	query := base + " AND " + strings.Join(clauses, " AND ")
+	if len(clauses) == 0 {
+		query = base
+	}
+	query += fmt.Sprintf(" ORDER BY t.created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		slog.Error("transaction.fetch_merchant_recent.query_failed", "merchant_id", merchantID, "error", err)
 		return nil, err
 	}
 	defer rows.Close()
 
-	transactions := []TransactionHistory{}
+	var total int
+	var transactions []TransactionHistory
 	for rows.Next() {
-		tx := TransactionHistory{}
+		var tx TransactionHistory
 		var amountStr, feeStr, profitStr string
 		var settlementDate sql.NullTime
-		err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.MerchantID, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt, &profitStr, &settlementDate)
-		if err != nil {
+		if err := rows.Scan(&tx.TxID, &tx.FromAccount, &tx.ToAccount, &amountStr, &tx.Currency, &tx.TxType, &tx.PaymentMode, &feeStr, &tx.Status, &tx.Narration, &tx.CreatedAt, &profitStr, &settlementDate, &total); err != nil {
 			slog.Error("transaction.fetch_merchant_recent.scan_failed", "merchant_id", merchantID, "error", err)
 			return nil, err
 		}
@@ -350,10 +342,18 @@ func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int
 		}
 		transactions = append(transactions, tx)
 	}
-
 	if err := rows.Err(); err != nil {
 		slog.Error("transaction.fetch_merchant_recent.rows_error", "merchant_id", merchantID, "error", err)
 		return nil, err
 	}
-	return transactions, nil
+	if transactions == nil {
+		transactions = []TransactionHistory{}
+	}
+	return &PaginatedTransactions{
+		Transactions: transactions,
+		Total:        total,
+		Page:         page,
+		Limit:        limit,
+		HasMore:      page*limit < total,
+	}, nil
 }
