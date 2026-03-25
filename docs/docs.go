@@ -829,6 +829,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/acmt023": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 acmt.023 identification verification request",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive acmt.023",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "msgId": {
+                                    "type": "string"
+                                },
+                                "vrfctnCount": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/acmt024": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 acmt.024 identification verification report",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive acmt.024",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "msgId": {
+                                    "type": "string"
+                                },
+                                "verified": {
+                                    "type": "boolean"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/auth": {
             "put": {
                 "security": [
@@ -1786,6 +1872,61 @@ const docTemplate = `{
                 }
             }
         },
+        "/merchant/account": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve merchant data and stats for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Merchants"
+                ],
+                "summary": "Update Merchant Business Account",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/merchant/list": {
             "get": {
                 "security": [
@@ -1914,6 +2055,135 @@ const docTemplate = `{
                 }
             }
         },
+        "/pacs002": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 pacs.002 payment status report",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive pacs.002",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "msgId": {
+                                    "type": "string"
+                                },
+                                "txStatus": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/pacs008": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 pacs.008 credit transfer message",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive pacs.008",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "msgId": {
+                                    "type": "string"
+                                },
+                                "nbOfTxs": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/pacs028": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 pacs.028 payment status request",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive pacs.028",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "msgId": {
+                                    "type": "string"
+                                },
+                                "orgnlMsgId": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/payments": {
             "post": {
                 "security": [
@@ -1989,21 +2259,21 @@ const docTemplate = `{
                 }
             }
         },
-        "/transaction": {
+        "/transaction/recent": {
             "get": {
                 "security": [
                     {
                         "BearerAuth": []
                     }
                 ],
-                "description": "Get a list of transactions with optional filtering",
+                "description": "Get a list of recent transactions for the authenticated user with optional filtering",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Transactions"
                 ],
-                "summary": "List transactions",
+                "summary": "Get Transactions",
                 "parameters": [
                     {
                         "type": "string",
@@ -2025,55 +2295,13 @@ const docTemplate = `{
                     },
                     {
                         "type": "integer",
-                        "description": "Page number",
+                        "description": "Page Number",
                         "name": "page",
                         "in": "query"
                     },
                     {
                         "type": "integer",
-                        "description": "Page size",
-                        "name": "limit",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/services.PaginatedTransactions"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/transaction/recent": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Get a list of recent transactions for the authenticated user",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Transactions"
-                ],
-                "summary": "Get recent transactions",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Number of transactions to return (default: 10, max: 100)",
+                        "description": "Page Size, Number of transactions to return (default: 10, max: 100)",
                         "name": "limit",
                         "in": "query"
                     }
@@ -2084,7 +2312,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/services.TransactionHistory"
+                                "$ref": "#/definitions/services.PaginatedTransactions"
                             }
                         }
                     },
@@ -2315,11 +2543,13 @@ const docTemplate = `{
                 "identifier": {
                     "description": "User phone number, email, or username",
                     "type": "string",
+                    "maxLength": 254,
                     "example": "+2348012345678"
                 },
                 "password": {
                     "description": "User password",
                     "type": "string",
+                    "maxLength": 72,
                     "minLength": 6
                 }
             }
@@ -2503,33 +2733,40 @@ const docTemplate = `{
                 "Email": {
                     "description": "User email address",
                     "type": "string",
+                    "maxLength": 254,
                     "example": "user@example.com"
                 },
                 "FirstName": {
                     "description": "User first name",
                     "type": "string",
+                    "maxLength": 50,
                     "minLength": 2,
                     "example": "John"
                 },
                 "LastName": {
                     "description": "User last name",
                     "type": "string",
+                    "maxLength": 50,
                     "minLength": 2,
                     "example": "Doe"
                 },
                 "Password": {
                     "description": "User password",
                     "type": "string",
+                    "maxLength": 72,
                     "minLength": 6
                 },
                 "PhoneNumber": {
                     "description": "Phone number",
                     "type": "string",
+                    "maxLength": 15,
+                    "minLength": 10,
                     "example": "+2348012345678"
                 },
                 "Username": {
                     "description": "Username",
                     "type": "string",
+                    "maxLength": 30,
                     "minLength": 3,
                     "example": "johndoe"
                 },

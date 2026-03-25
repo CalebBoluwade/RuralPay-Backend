@@ -1,251 +1,231 @@
-# ISO 20022 Integration with Moov Library - Beginner's Guide
+# ISO 20022 Integration
 
-This project integrates the Moov ISO 20022 library to construct transaction payloads for financial messaging standards.
+RuralPay uses the [Moov ISO 20022](https://github.com/moov-io/iso20022) library to construct and parse financial messages exchanged with NIBSS. All outbound messages are signed and encrypted using a hybrid RSA + AES-256-GCM scheme before being dispatched. Inbound callbacks are verified and decrypted before parsing.
 
-## What is ISO 20022?
+---
 
-ISO 20022 is the **global standard for financial messaging**. Think of it as a common language that banks and financial institutions use to communicate with each other when transferring money.
+## Message Types
 
-### Why ISO 20022?
-- **Universal**: All major banks worldwide understand this format
-- **Structured**: Uses XML format that's both human and machine readable
-- **Rich Data**: Can include detailed transaction information
-- **Future-proof**: Designed to handle modern payment needs
+| Message | Direction | Purpose |
+|---|---|---|
+| `pacs.008.001.08` | Outbound | FI-to-FI credit transfer — initiates a funds transfer to NIBSS |
+| `pacs.002.001.08` | Inbound / Outbound | Payment status report — NIBSS confirms, rejects, or reports status |
+| `pacs.028.001.04` | Outbound | Payment status request — query NIBSS for the status of a prior transfer |
+| `acmt.023.001.02` | Outbound | Identification verification request — verify an account number at a bank |
+| `acmt.024.001.02` | Inbound | Identification verification report — NIBSS response to acmt.023 |
 
-### Key Concepts for Beginners:
+---
 
-1. **Messages**: Different types of financial communications
-   - `pacs.008` = "Please transfer money from A to B"
-   - `pacs.002` = "Here's the status of that transfer"
+## Message Security
 
-2. **FI to FI**: Financial Institution to Financial Institution (bank-to-bank)
+Every outbound message goes through a hybrid encryption + signing pipeline before it reaches NIBSS. The implementation lives in `internal/utils/crypto.go` and is wired into `ISO20022Service`.
 
-3. **Settlement**: The actual movement of money between banks
+### How it works
 
-4. **XML Format**: Structured data format that looks like HTML but for financial data
+```
+XML payload
+    │
+    ▼
+SealMessage(xml, senderPriv, nibssPub)
+    │
+    ├─ 1. Generate random 32-byte AES key
+    ├─ 2. Encrypt XML with AES-256-GCM          → EncryptedPayload (nonce prepended)
+    ├─ 3. Wrap AES key with nibss_public.key     → WrappedKey  (only NIBSS can unwrap)
+    └─ 4. Sign EncryptedPayload with iso20022_signing.key → Signature (RSA-PSS + SHA-256)
+    │
+    ▼
+SignedMessage { EncryptedPayload, WrappedKey, Signature }
+    │
+    ▼
+JSON → HTTP POST to NIBSS
+```
 
-## Features
+NIBSS receives the `SignedMessage` JSON and:
+1. Verifies `Signature` using `iso20022_signing_public.key` — confirms the message came from RuralPay
+2. Unwraps `WrappedKey` using their private key — recovers the AES key
+3. Decrypts `EncryptedPayload` — reads the XML
 
-- **pacs.008**: FI to FI Customer Credit Transfer messages
-- **pacs.002**: Payment Status Report messages
-- XML serialization and deserialization
-- Settlement system integration ready
+If signature verification fails, the message is rejected before any decryption is attempted.
 
-## Dependencies
+### Inbound callbacks
+
+Callback handlers (`ISO20022CallbackHandler`) call `decryptBody` on every request. It:
+1. Reads the raw body
+2. Attempts to JSON-decode it as a `SignedMessage`
+3. If successful, calls `VerifyAndOpenXML` to verify and decrypt
+4. Falls back to treating the body as plain XML if it is not a `SignedMessage` (backward compatible)
+
+---
+
+## Key Setup
+
+### Keys on disk
+
+```
+keys/
+├── iso20022_signing.key          # RuralPay RSA-2048 private key  (never share)
+├── iso20022_signing_public.key   # RuralPay public key            (share with NIBSS)
+├── nibss_public.key              # NIBSS public key               (received from NIBSS)
+└── nibss_private.key             # NIBSS private key              (TEST ONLY — delete in production)
+```
+
+`nibss_private.key` was generated locally to simulate NIBSS in tests. It must not exist in production — NIBSS generates and holds their own private key.
+
+### Generating keys
 
 ```bash
-go get github.com/moov-io/iso20022
+# RuralPay signing keypair
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/iso20022_signing.key
+openssl pkey -in keys/iso20022_signing.key -pubout -out keys/iso20022_signing_public.key
+
+# Simulated NIBSS keypair (tests only)
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/nibss_private.key
+openssl pkey -in keys/nibss_private.key -pubout -out keys/nibss_public.key
 ```
 
-## Usage
+In production, replace `keys/nibss_public.key` with the PEM file received from NIBSS during onboarding.
 
-### Basic Transaction Processing (Step-by-Step for Beginners)
+### Environment variables
 
-```go
-import (
-    "github.com/ruralpay/backend/internal/models"
-    "github.com/ruralpay/backend/internal/services"
-)
-
-// Step 1: Create the ISO 20022 service (this handles all the complex stuff)
-iso20022Service := services.NewISO20022Service()
-
-// Step 2: Create a transaction using your existing data structure
-tx := &models.TransactionRecord{
-    TransactionID: "TXN123456789",  // Your internal transaction ID
-    ReferenceID:   "REF987654321",  // Reference for tracking end-to-end
-    FromCardID:    "CARD001",       // NFC card that's sending money
-    ToCardID:      "CARD002",       // NFC card that's receiving money
-    Amount:        250.75,          // Amount in dollars (or your currency)
-    Currency:      "NGN",           // Currency code (NGN, EUR, GBP, etc.)
-}
-
-// Step 3: Convert your transaction to bank-standard format
-// This creates a pacs.008 message ("please transfer money")
-pacs008, err := iso20022Service.CreatePacs008(tx)
-if err != nil {
-    log.Fatal("Failed to create bank message:", err)
-}
-
-// Step 4: Convert to XML format that banks understand
-xmlData, err := iso20022Service.ConvertToXML(pacs008)
-if err != nil {
-    log.Fatal("Failed to create XML:", err)
-}
-
-// Step 5: Send to the banking system
-// (In production, this would go to your bank's API)
-err = iso20022Service.SendToSettlement(pacs008)
-if err != nil {
-    log.Fatal("Failed to send to bank:", err)
-}
-
-// Success! Your NFC payment is now in bank-standard format
-fmt.Println("Payment sent to banking system!")
+```env
+ISO20022_SIGNING_KEY_PATH=keys/iso20022_signing.key
+ISO20022_NIBSS_PUB_KEY_PATH=keys/nibss_public.key
 ```
 
-### Payment Status Reporting (Getting Updates from Banks)
+Keys are loaded at startup in `NewISO20022Service`. If either path is missing or unreadable, the service starts without signing — messages are sent as plain XML. This is intentional for local development without keys configured.
 
-```go
-// After you send a pacs.008, the bank will send back a status update
-// This creates a pacs.002 message ("here's what happened with your payment")
-
-// Status codes you'll commonly see:
-// "ACCP" = Accepted - Bank got your request and will process it
-// "ACSC" = Accepted Settlement Completed - Money has been transferred!
-// "RJCT" = Rejected - Something went wrong (insufficient funds, invalid account, etc.)
-// "PDNG" = Pending - Bank is still working on it
-
-pacs002, err := iso20022Service.CreatePacs002(tx, "ACCP") // ACCP = Accepted
-if err != nil {
-    log.Fatal("Failed to create status report:", err)
-}
-
-// In a real system, you'd receive these messages from the bank
-// and use them to update your transaction status in your database
-```
-
-## Message Types Explained (For Beginners)
-
-### pacs.008 - FI to FI Customer Credit Transfer
-**What it does**: This is like a formal request to transfer money between banks.
-
-**Real-world example**: When you send money from your Chase account to someone's Wells Fargo account, your bank sends a pacs.008 message to Wells Fargo saying "Please credit $100 to account XYZ, we'll settle this later."
-
-**Contains**:
-- **Debtor**: Who is sending the money (your bank account)
-- **Creditor**: Who is receiving the money (recipient's bank account)
-- **Amount**: How much money to transfer
-- **Settlement Info**: How and when the banks will exchange the actual money
-
-### pacs.002 - Payment Status Report
-**What it does**: This is like a receipt or status update for a payment.
-
-**Real-world example**: After Wells Fargo receives the pacs.008 message, they send back a pacs.002 saying "Got it! We've credited the account" or "Sorry, there was a problem."
-
-**Status codes explained**:
-- `ACCP` = **Accepted** - "We got your request and will process it"
-- `ACSC` = **Accepted Settlement Completed** - "Done! Money has been transferred"
-- `RJCT` = **Rejected** - "Can't do this transfer (insufficient funds, invalid account, etc.)"
-- `PDNG` = **Pending** - "We're still working on it"
+---
 
 ## HTTP Endpoints
 
-The service provides HTTP endpoints for testing:
+### Outbound (service-initiated)
 
-- `POST /iso20022/convert` - Convert transaction to ISO 20022 format
-- `POST /iso20022/settlement` - Process settlement with status report
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/iso20022/convert` | Convert a transaction to pacs.008 XML and return it |
+| `POST` | `/iso20022/settlement` | Build, sign, and send a pacs.008 to NIBSS; returns pacs.002 result |
 
-## Example Output (Explained for Beginners)
+### Inbound callbacks (NIBSS-initiated)
 
-### pacs.008 XML Structure
+| Method | Path | Handler | Message |
+|---|---|---|---|
+| `POST` | `/pacs008` | `ReceivePacs008` | Inbound credit transfer from NIBSS |
+| `POST` | `/pacs002` | `ReceivePacs002` | Payment status report from NIBSS |
+| `POST` | `/pacs028` | `ReceivePacs028` | Payment status request from NIBSS |
+| `POST` | `/acmt023` | `ReceiveAcmt023` | Account identification verification request |
+| `POST` | `/acmt024` | `ReceiveAcmt024` | Account identification verification report |
+
+All callback endpoints accept either a `SignedMessage` JSON envelope or raw XML.
+
+---
+
+## Usage
+
+### Send a funds transfer
+
+```go
+svc := services.NewISO20022Service()
+
+tx := &models.TransactionRecord{
+    TransactionID: "TXN123456789",
+    FromAccountID: "0123456789",
+    ToAccountID:   "9876543210",
+    ToBankCode:    "000013",
+    Amount:        25075, // kobo (250.75 NGN)
+    Currency:      "NGN",
+}
+
+// Builds pacs.008, signs + encrypts it, sends to NIBSS, returns pacs.002 result
+result, err := svc.SendToSettlement(pacs008)
+// result.Status: "ACSC" | "ACCP" | "RJCT"
+// result.RejectReason: populated when Status == "RJCT"
+```
+
+### Query payment status
+
+```go
+result, err := svc.RequestPaymentStatus(originalMsgID, originalTxID)
+```
+
+Builds a pacs.028, sends it to NIBSS, and returns the pacs.002 response.
+
+### Verify an account
+
+```go
+doc, err := svc.CreateAcmt023("0123456789", "000013")
+xmlData, err := svc.ConvertToXML(doc)
+resp, err := svc.nibssClient.VerifyAccountIdentification([]byte(xmlData))
+// resp.Verified, resp.AccountName
+```
+
+### Sign and verify manually
+
+```go
+// Seal
+msg, err := svc.SignXML(xmlString)
+// msg.EncryptedPayload, msg.WrappedKey, msg.Signature
+
+// Open
+plaintext, err := svc.VerifyAndOpenXML(msg)
+```
+
+---
+
+## pacs.002 Status Codes
+
+| Code | Meaning |
+|---|---|
+| `ACCP` | Accepted — NIBSS received and will process |
+| `ACSC` | Accepted Settlement Completed — funds transferred |
+| `RJCT` | Rejected — see `RejectReason` for the ISO reason code |
+| `PDNG` | Pending — still processing |
+
+`SendToSettlement` returns an error for any status other than `ACSC` or `ACCP`.
+
+---
+
+## Example pacs.008 XML
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- This is a request to transfer money between banks -->
 <FIToFICstmrCdtTrf>
-  <!-- Group Header: Basic info about this message -->
   <GrpHdr>
-    <MsgId>unique-message-id</MsgId>           <!-- Unique ID for this message -->
-    <CreDtTm>2026-01-03T19:29:43.943477</CreDtTm> <!-- When this message was created -->
-    <NbOfTxs>1</NbOfTxs>                        <!-- Number of transactions in this message -->
-    <TtlIntrBkSttlmAmt Ccy="NGN">250.75</TtlIntrBkSttlmAmt> <!-- Total amount to settle -->
-    <IntrBkSttlmDt>2026-01-03</IntrBkSttlmDt>   <!-- When banks should settle -->
+    <MsgId>550e8400-e29b-41d4-a716-446655440000</MsgId>
+    <CreDtTm>2026-01-03T19:29:43</CreDtTm>
+    <NbOfTxs>1</NbOfTxs>
+    <TtlIntrBkSttlmAmt Ccy="NGN">250.75</TtlIntrBkSttlmAmt>
+    <IntrBkSttlmDt>2026-01-03</IntrBkSttlmDt>
     <SttlmInf>
-      <SttlmMtd>CLRG</SttlmMtd>                 <!-- Settlement method: Clearing -->
+      <SttlmMtd>CLRG</SttlmMtd>
     </SttlmInf>
   </GrpHdr>
-  <!-- Credit Transfer Transaction Info: Details of the actual transfer -->
   <CdtTrfTxInf>
     <PmtId>
-      <InstrId>TXN123456789</InstrId>           <!-- Instruction ID (our internal transaction ID) -->
-      <EndToEndId>REF987654321</EndToEndId>     <!-- End-to-end reference (tracks from start to finish) -->
-      <TxId>TXN123456789</TxId>                 <!-- Transaction ID -->
+      <InstrId>TXN123456789</InstrId>
+      <EndToEndId>TXN123456789</EndToEndId>
+      <TxId>TXN123456789</TxId>
     </PmtId>
-    <IntrBkSttlmAmt Ccy="NGN">250.75</IntrBkSttlmAmt> <!-- Amount for this specific transaction -->
-    <IntrBkSttlmDt>2026-01-03</IntrBkSttlmDt>   <!-- Settlement date for this transaction -->
-    <ChrgBr>SLEV</ChrgBr>                       <!-- Charge Bearer: Service Level (who pays fees) -->
-    <Dbtr>                                      <!-- Debtor: Who is sending the money -->
-      <Nm>Debtor Name</Nm>                      <!-- Name of the sender -->
-    </Dbtr>
-    <Cdtr>                                      <!-- Creditor: Who is receiving the money -->
-      <Nm>Creditor Name</Nm>                    <!-- Name of the recipient -->
-    </Cdtr>
+    <IntrBkSttlmAmt Ccy="NGN">250.75</IntrBkSttlmAmt>
+    <ChrgBr>SLEV</ChrgBr>
+    <DbtrAgt>
+      <FinInstnId><BICFI>RURALPAY</BICFI></FinInstnId>
+    </DbtrAgt>
+    <Dbtr><Nm>0123456789</Nm></Dbtr>
+    <CdtrAgt>
+      <FinInstnId>
+        <ClrSysMmbId><MmbId>000013</MmbId></ClrSysMmbId>
+      </FinInstnId>
+    </CdtrAgt>
+    <Cdtr><Nm>9876543210</Nm></Cdtr>
   </CdtTrfTxInf>
 </FIToFICstmrCdtTrf>
 ```
 
-### What happens in the real world:
-1. **Your app** creates this XML message
-2. **Your bank** receives it and validates the transaction
-3. **Your bank** sends this message to the **recipient's bank**
-4. **Recipient's bank** processes it and credits the account
-5. **Both banks** settle the actual money transfer later (usually end of day)
+---
 
-## Running the Example
+## Dependencies
 
-```bash
-go run examples/iso20022_example.go
 ```
-
-## Integration Notes (Beginner-Friendly)
-
-### How this works in your NFC Payment System:
-
-1. **Customer taps NFC card** → Your app processes the payment
-2. **Your app creates transaction** → Uses your internal Transaction model
-3. **Convert to ISO 20022** → Our service transforms it to bank-standard format
-4. **Send to settlement** → Banks can now process the payment
-5. **Receive status updates** → Banks send back confirmation/rejection
-
-### Key Benefits:
-- **Bank Compatibility**: Any bank that supports ISO 20022 can process your payments
-- **Automatic Conversion**: You work with simple Go structs, we handle the complex XML
-- **Error Handling**: The Moov library validates all the XML for you
-- **Future-Proof**: ISO 20022 is the global standard, won't become obsolete
-
-### What the service does for you:
-- ✅ Converts your transaction data to proper ISO format
-- ✅ Handles all the complex XML structure
-- ✅ Manages proper data types (dates, amounts, currencies)
-- ✅ Validates the message format
-- ✅ Ready for real bank integration
-
-## Next Steps (Beginner Roadmap)
-
-### Phase 1: Understanding (You are here! 🎉)
-- ✅ Learn what ISO 20022 is
-- ✅ Understand pacs.008 and pacs.002 messages
-- ✅ Run the example code
-
-### Phase 2: Basic Integration
-1. **Test with your data**: Replace the example transaction with real data from your NFC system
-2. **Connect to a test bank**: Most banks provide sandbox environments for testing
-3. **Handle responses**: Process the pacs.002 status messages you receive back
-
-### Phase 3: Production Ready
-1. **Real settlement integration**: Replace `SendToSettlement()` with actual bank API calls
-2. **Add party details**: Include real debtor/creditor information from your card/account data
-3. **Error handling**: Add retry logic, timeout handling, and error recovery
-4. **Monitoring**: Log all transactions and their statuses
-
-### Phase 4: Advanced Features
-1. **More message types**: 
-   - `pain.001` - Customer payment initiation
-   - `camt.053` - Bank account statements
-   - `camt.054` - Bank notification messages
-2. **Bulk processing**: Handle multiple transactions in one message
-3. **Real-time status**: Implement webhooks for instant payment confirmations
-
-### Common Beginner Questions:
-
-**Q: Do I need to understand XML?**
-A: No! The Moov library handles all XML creation. You just work with Go structs.
-
-**Q: How do I connect to actual banks?**
-A: Banks provide APIs or message queues. You'll send the XML we generate to their endpoints.
-
-**Q: What if a payment fails?**
-A: The bank sends back a pacs.002 with status "RJCT" and a reason code.
-
-**Q: Is this secure?**
-A: Yes, but you'll add TLS encryption and authentication when connecting to real banks.
+github.com/moov-io/iso20022   — ISO 20022 message structs and XML marshalling
+golang.org/x/crypto           — RSA-PSS signing, AES-256-GCM encryption
+```

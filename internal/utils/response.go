@@ -12,6 +12,7 @@ type ResponseMessage string
 
 // Error Responses
 const (
+	AccountNotFoundError ResponseMessage = "Account Not Found"
 	UserNotFoundError    ResponseMessage = "User Not Found"
 	TokenError           ResponseMessage = "Invalid or Expired Reset Token"
 	OTPError             ResponseMessage = "Invalid or Expired OTP"

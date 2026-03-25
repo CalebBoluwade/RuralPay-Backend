@@ -31,6 +31,7 @@ type AccountService struct {
 	bankService     *BankService
 	ussdService     *USSDService
 	notificationSVC *NotificationService
+	isoService      *ISO20022Service
 }
 
 type LinkAccountRequest struct {
@@ -68,6 +69,7 @@ func NewAccountService(db *sql.DB, redisClient *redis.Client) *AccountService {
 		bankService:     NewBankService(),
 		qrService:       NewQRService(db, redisClient),
 		notificationSVC: NewNotificationService(),
+		isoService:      NewISO20022Service(),
 	}
 }
 
@@ -156,24 +158,24 @@ func (s *AccountService) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Router /account/name-enquiry [get]
 func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.AccountNameEnquiry.start")
+	slog.Info("account.name.enquiry.start")
 	accountId := strings.TrimSpace(r.URL.Query().Get("accountId"))
 	bankCode := strings.TrimSpace(r.URL.Query().Get("bankCode"))
 
 	if accountId == "" {
-		slog.Warn("account.AccountNameEnquiry.missing_account_id")
+		slog.Warn("account.name.enquiry.missing_account_id")
 		utils.SendErrorResponse(w, "Account Number Is Required", http.StatusBadRequest, nil)
 		return
 	}
 
 	if !IsValidAccountId(accountId) {
-		slog.Warn("account.AccountNameEnquiry.invalid_account_id", "account_id", accountId)
+		slog.Warn("account.name.enquiry.invalid_account_id", "account_id", accountId)
 		utils.SendErrorResponse(w, "invalid Account Number format", http.StatusBadRequest, nil)
 		return
 	}
 
 	if bankCode != "" && !IsValidBankCode(bankCode) {
-		slog.Warn("account.AccountNameEnquiry.invalid_bank_code", "bank_code", bankCode)
+		slog.Warn("account.name.enquiry.invalid_bank_code", "bank_code", bankCode)
 		utils.SendErrorResponse(w, "invalid bankCode format", http.StatusBadRequest, nil)
 		return
 	}
@@ -181,7 +183,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 	// Check virtual accounts in Redis first
 	if s.redis != nil {
 		if vaData, err := ValidateVirtualAccount(s.redis, accountId); err == nil {
-			slog.Info("account.AccountNameEnquiry.virtual_account_found", "account_id", accountId)
+			slog.Info("account.name.enquiry.virtual_account_found", "account_id", accountId)
 			utils.SendSuccessResponse(w, "Account Found", map[string]any{
 				"accountId":   accountId,
 				"accountName": vaData.AccountName,
@@ -201,12 +203,12 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 
 	if err == nil {
 		if status != "ACTIVE" {
-			slog.Warn("account.AccountNameEnquiry.account_not_active", "account_id", accountId, "status", status)
+			slog.Warn("account.name.enquiry.account_not_active", "account_id", accountId, "status", status)
 			utils.SendErrorResponse(w, "Account Not Active", http.StatusUnprocessableEntity, nil)
 			return
 		}
 
-		slog.Info("account.AccountNameEnquiry.local_account_found", "account_id", accountId)
+		slog.Info("account.name.enquiry.local_account_found", "account_id", accountId)
 		utils.SendSuccessResponse(w, "Account Found", map[string]any{
 			"accountId":   accountId,
 			"accountName": accountName,
@@ -216,8 +218,47 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Warn("account.AccountNameEnquiry.account_not_found", "account_id", accountId)
-	utils.SendErrorResponse(w, "Account Not Found", http.StatusNotFound, nil)
+	slog.Warn("account.name.enquiry.account_not_found_locally", "account_id", accountId)
+
+	if bankCode == "" {
+		slog.Warn("account.name.enquiry.no_bank_code_for_switch_lookup", "account_id", accountId)
+		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		return
+	}
+
+	acmt023, err := s.isoService.CreateAcmt023(accountId, bankCode)
+	if err != nil {
+		slog.Error("account.name.enquiry.acmt023_build_failed", "error", err)
+		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		return
+	}
+
+	xmlData, err := s.isoService.ConvertToXML(acmt023)
+	if err != nil {
+		slog.Error("account.name.enquiry.acmt023_xml_failed", "error", err)
+		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		return
+	}
+
+	idResp, err := s.nibssClient.VerifyAccountIdentification([]byte(xmlData))
+	if err != nil {
+		slog.Error("account.name.enquiry.acmt023_nibss_failed", "error", err)
+		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		return
+	}
+
+	if !idResp.Verified {
+		slog.Warn("account.name.enquiry.acmt023_not_verified", "account_id", accountId)
+		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		return
+	}
+
+	slog.Info("account.name.enquiry.acmt023_found", "account_id", accountId)
+	utils.SendSuccessResponse(w, "Account Found", map[string]any{
+		"accountId":   accountId,
+		"accountName": idResp.AccountName,
+		"source":      "External",
+	}, http.StatusOK)
 }
 
 // AccountBalanceEnquiry retrieves all accounts for authenticated user
@@ -231,7 +272,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 // @Security BearerAuth
 // @Router /account/balance-enquiry [get]
 func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.AccountBalanceEnquiry.start")
+	slog.Info("account.balance.enquiry.start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	// userID is already an int, no need to convert

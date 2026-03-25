@@ -421,7 +421,7 @@ func (ns *NotificationService) SendLoginEmail(user *models.User, device string) 
 		return nil
 	}
 	body, err := ns.renderTemplate("login.html", accountEmailData{
-		Title:      "New Login Detected",
+		Title:      "New Login Detected On Your Account",
 		FirstName:  user.FirstName,
 		Device:     device,
 		Date:       time.Now().Format("02 Jan 2006, 03:04 PM"),
@@ -436,7 +436,7 @@ func (ns *NotificationService) SendLoginEmail(user *models.User, device string) 
 	m := mail.NewMessage()
 	m.SetAddressHeader("From", ns.smtpFrom, ns.smtpName)
 	m.SetHeader("To", user.Email)
-	m.SetHeader("Subject", "New Login to Your RuralPay Account")
+	m.SetHeader("Subject", "RuralPay Account Login")
 	m.SetBody("text/html", body)
 
 	d := mail.NewDialer(ns.smtpHost, ns.smtpPort, ns.smtpUser, ns.smtpPassword)

@@ -129,6 +129,7 @@ func main() {
 	// Initialize unified payment handler
 	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm)
 	feedbackHandler := handlers.NewFeedbackHandler(db, notificationService)
+	isoCallbackHandler := handlers.NewISO20022CallbackHandler(iso20022Service)
 
 	// Initialize auth middleware with Redis
 	mW.InitAuthMiddleware(redisClient, userService, models.SessionConfig{
@@ -183,6 +184,13 @@ func main() {
 	// Static file server for bank logos
 	r.Handle("/static/bank-logos/*", http.StripPrefix("/static/bank-logos/",
 		mW.StaticFileServer("./static/bank-logos")))
+
+	// ISO20022 callback endpoints — top-level, no auth, inbound pushes from NIBSS
+	r.Post("/pacs008", isoCallbackHandler.ReceivePacs008)
+	r.Post("/pacs002", isoCallbackHandler.ReceivePacs002)
+	r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
+	r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
+	r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
 
 	// API routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -261,6 +269,10 @@ func main() {
 			// ISO 20022 endpoints
 			r.Post("/iso20022/convert", iso20022Service.ConvertToISO20022)
 			r.Post("/iso20022/settlement", iso20022Service.ProcessSettlement)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(mW.AuthSessionMiddleware)
 
 			merchantRoute := "/merchant"
 

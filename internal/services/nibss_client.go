@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/moov-io/iso20022/pkg/pacs_v08"
 	"github.com/ruralpay/backend/internal/circuitbreaker"
 	"github.com/sony/gobreaker"
 	"github.com/spf13/viper"
@@ -51,18 +52,56 @@ type MandateResponse struct {
 	Status        string `json:"status"`
 }
 
-type FundsTransferSettlementResponse struct {
-	XMLName         xml.Name `xml:"FundsTransferSettlementResponse" json:"-"`
-	Status          string   `json:"status" xml:"Status"`
-	Message         string   `json:"message" xml:"Message"`
-	TransactionId   string   `json:"transactionId" xml:"TransactionId"`
-	TransactionDate string   `json:"transactionDate" xml:"TransactionDate"`
+type SettlementResult struct {
+	Status        string
+	TransactionID string
+	RejectReason  string
 }
 
 type CardSettlementResponse struct {
 	XMLName xml.Name `xml:"CardSettlementResponse" json:"-"`
 	Status  string   `json:"status" xml:"Status"`
 	Message string   `json:"message" xml:"Message"`
+}
+
+type IdentificationVerificationResponse struct {
+	XMLName     xml.Name `xml:"IdVrfctnRpt" json:"-"`
+	Verified    bool     `json:"verified" xml:"Rpt>Vrfctn"`
+	AccountName string   `json:"accountName" xml:"Rpt>OrgnlPtyAndAcctId>Pty>Nm"`
+}
+
+func (c *NIBSSClient) VerifyAccountIdentification(xmlData []byte) (*IdentificationVerificationResponse, error) {
+	body, err := c.mandateBreaker.Execute(func() (interface{}, error) {
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/acmt/identification-verification", c.mandateBaseURL), bytes.NewBuffer(xmlData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create acmt.023 request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("acmt.023 request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS acmt.023 API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS acmt.023 API returned status %d", resp.StatusCode)
+		}
+
+		var idResp IdentificationVerificationResponse
+		if err := xml.NewDecoder(resp.Body).Decode(&idResp); err != nil {
+			return nil, fmt.Errorf("failed to decode acmt.024 response: %w", err)
+		}
+		return &idResp, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body.(*IdentificationVerificationResponse), nil
 }
 
 func NewNIBSSClient() *NIBSSClient {
@@ -175,13 +214,12 @@ func (c *NIBSSClient) GetAccountMandate(bankCode, accountNumber string) (*Mandat
 	return result.(*MandateResponse), nil
 }
 
-func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*FundsTransferSettlementResponse, error) {
+func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
 	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
 		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/funds-transfer", c.settlementBaseURL), bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-
 		req.Header.Set("Content-Type", "application/xml")
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
 
@@ -198,18 +236,50 @@ func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*FundsTran
 			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
 		}
 
-		var settlementResp FundsTransferSettlementResponse
-		if err := xml.NewDecoder(resp.Body).Decode(&settlementResp); err != nil {
-			return nil, fmt.Errorf("failed to decode response: %w", err)
+		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
+		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+			return nil, fmt.Errorf("failed to decode pacs.002 response: %w", err)
 		}
-		return &settlementResp, nil
+		return &pacs002, nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
+	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
+}
 
-	return body.(*FundsTransferSettlementResponse), nil
+func (c *NIBSSClient) RequestPaymentStatus(xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
+	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/payment-status", c.settlementBaseURL), bytes.NewBuffer(xmlData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pacs.028 request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/xml")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pacs.028 request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+		}
+
+		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
+		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+			return nil, fmt.Errorf("failed to decode pacs.002 status response: %w", err)
+		}
+		return &pacs002, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
 }
 
 func (c *NIBSSClient) ProcessCardSettlement(xmlData []byte) (*CardSettlementResponse, error) {

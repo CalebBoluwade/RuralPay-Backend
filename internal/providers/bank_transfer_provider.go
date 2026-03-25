@@ -279,7 +279,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 	resp, err := p.iso20022Service.SendToSettlement(doc)
 	if err != nil {
 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
-		shouldReverse := p.shouldReverseOnSettlementFailure(err, &resp)
+		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
 		if shouldReverse {
 			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
@@ -300,14 +300,12 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 	return nil, false
 }
 
-func (p *BankTransferPaymentProvider) shouldReverseOnSettlementFailure(err error, resp *services.FundsTransferSettlementResponse) bool {
-	if resp != nil {
-		switch resp.Status {
-		case "PENDING", "PROCESSING":
-			return false
-		case "REJECTED", "FAILED":
-			return true
-		}
+func (p *BankTransferPaymentProvider) shouldReverseOnSettlementFailure(resp services.SettlementResult) bool {
+	switch resp.Status {
+	case "RJCT":
+		return true
+	case "PENDING", "PROCESSING", "ACCP":
+		return false
 	}
 	return false
 }

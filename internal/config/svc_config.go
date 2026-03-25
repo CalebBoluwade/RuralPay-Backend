@@ -68,6 +68,9 @@ func init() {
 	viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
 	viper.BindEnv("nibss.bvn_url", "NIBSS_BVN_URL")
 
+	viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")
+	viper.BindEnv("iso20022.nibss_pub_key_path", "ISO20022_NIBSS_PUB_KEY_PATH")
+
 	viper.BindEnv("PII_ENCRYPTION_KEY", "PII_ENCRYPTION_KEY")
 	viper.BindEnv("log.file", "LOG_FILE")
 	viper.SetDefault("log.file", "./logs/app.log")
