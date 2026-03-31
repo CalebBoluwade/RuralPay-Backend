@@ -14,12 +14,12 @@ import (
 
 type BINResponse struct {
 	BIN        string `json:"bin"`
-	Scheme     string `json:"scheme"`      // Visa, Mastercard, Verve
-	IssuerBank string `json:"issuer_bank"` // GTBank, Zenith, etc.
-	Type       string `json:"type"`        // Debit, Credit
-	Country    string `json:"country"`     // NG, US
-	Currency   string `json:"currency"`    // NGN, USD
-	Source     string `json:"source"`      // "internal" or "external"
+	Scheme     string `json:"scheme"`     // Visa, Mastercard, Verve
+	IssuerBank string `json:"issuerBank"` // GTBank, Zenith, etc.
+	Type       string `json:"type"`       // Debit, Credit
+	Country    string `json:"country"`    // NG, US
+	Currency   string `json:"currency"`   // NGN, USD
+	Source     string `json:"source"`     // "internal" or "external"
 }
 
 type CardInfo struct {
@@ -37,7 +37,7 @@ type CardInfo struct {
 type CardPaymentRequest struct {
 	TransactionID   string      `json:"transactionId"`
 	TransactionDate int64       `json:"transactionDate"`
-	MerchantID      string      `json:"merchantId" validate:"required,gt=0"`
+	MerchantID      int         `json:"merchantId" validate:"required,gt=0"`
 	Amount          int64       `json:"amount" validate:"required,gt=0"`
 	PaymentMode     PaymentMode `json:"paymentMode"`
 	CardInfo        CardInfo    `json:"cardInfo"`

@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/moov-io/iso8583"
 	"github.com/moov-io/iso8583/encoding"
@@ -14,20 +16,44 @@ import (
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
+	"github.com/spf13/viper"
 )
 
 type ISO8583Service struct {
-	db   *sql.DB
-	HSM  hsm.HSMInterface
-	spec *iso8583.MessageSpec
+	db         *sql.DB
+	HSM        hsm.HSMInterface
+	spec       *iso8583.MessageSpec
+	senderPriv *rsa.PrivateKey
+	nibssPub   *rsa.PublicKey
 }
 
 func NewISO8583Service(db *sql.DB, hsmInstance hsm.HSMInterface) models.ISO8583Service {
-	return &ISO8583Service{
+	svc := &ISO8583Service{
 		db:   db,
 		HSM:  hsmInstance,
 		spec: createISO8583Spec(),
 	}
+
+	if privPath := viper.GetString("iso20022.signing_key_path"); privPath != "" {
+		if pem, err := os.ReadFile(privPath); err == nil {
+			svc.senderPriv, _ = utils.ParseRSAPrivateKey(pem)
+		}
+	}
+	if pubPath := viper.GetString("iso20022.nibss_pub_key_path"); pubPath != "" {
+		if pem, err := os.ReadFile(pubPath); err == nil {
+			svc.nibssPub, _ = utils.ParseRSAPublicKey(pem)
+		}
+	}
+	return svc
+}
+
+// SignXML seals an XML string into a SignedMessage using AES-256-GCM + RSA.
+// Returns an error if keys are not configured.
+func (iso *ISO8583Service) SignXML(xmlData string) (*utils.SignedMessage, error) {
+	if iso.senderPriv == nil || iso.nibssPub == nil {
+		return nil, fmt.Errorf("signing keys not configured")
+	}
+	return utils.SealMessage([]byte(xmlData), iso.senderPriv, iso.nibssPub)
 }
 
 func (s *ISO8583Service) BuildISO8583Message(cardReq *models.CardPaymentRequest) ([]byte, error) {

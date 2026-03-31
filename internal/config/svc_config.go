@@ -88,6 +88,9 @@ func init() {
 	_ = viper.BindEnv("app.base_url", "APP_BASE_URL")
 	viper.SetDefault("app.base_url", "http://localhost:8080")
 
+	_ = viper.BindEnv("app.name", "APP_NAME")
+	viper.SetDefault("app.name", "RuralPay")
+
 	_ = viper.BindEnv("session.inactivity_ttl_minutes", "SESSION_INACTIVITY_TTL_MINUTES")
 	_ = viper.BindEnv("session.absolute_ttl_minutes", "SESSION_ABSOLUTE_TTL_MINUTES")
 

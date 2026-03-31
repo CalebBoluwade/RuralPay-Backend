@@ -117,7 +117,7 @@ func main() {
 	}()
 
 	// Initialize services
-	notificationService := services.NewNotificationService()
+	notificationService := services.NewNotificationService(db)
 	userService := services.NewUserService(db, redisClient, notificationService)
 	bankService := services.NewBankService()
 	accountService := services.NewAccountService(db, redisClient)
@@ -125,6 +125,7 @@ func main() {
 	iso20022Service := services.NewISO20022Service()
 	merchantService := services.NewMerchantService(db)
 	transactionQueryService := services.NewTransactionQueryService(db)
+	voucherService := services.NewVoucherService(db)
 
 	// Initialize unified payment handler
 	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm)
@@ -220,6 +221,9 @@ func main() {
 
 		r.Get("/banks", bankService.GetAllBanks)
 
+		r.Get("/encryption/keys", hsmKeyService.GetUserPublicKeys)
+		r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
+
 		// Feedback endpoints (public — clicked from email links)
 		r.Get("/feedback", feedbackHandler.HandleTransactionRating)
 		r.Get("/feedback/referral", feedbackHandler.HandleReferralSource)
@@ -243,7 +247,7 @@ func main() {
 			r.Put("/account/limits", accountService.UpdateUserLimits)
 			r.Get("/account/virtual-account", accountService.GetVirtualAccount)
 			r.Get("/account/beneficiaries", accountService.GetBeneficiaries)
-			r.Get("/account/notifications", accountService.GetUserNotifications)
+			r.Get("/account/notifications", notificationService.GetUserNotifications)
 
 			// QR endpoints
 			r.Post("/account/qr", accountService.GenerateQR)
@@ -260,11 +264,14 @@ func main() {
 			r.Get("/transaction/{txId}", transactionQueryService.GetTransaction)
 
 			// Card Endpoints
-			r.Get("/card/bins", cardService.QueryCardBin)
+			r.Get("/card/bin", cardService.QueryCardBin)
 			r.Post("/card/provision", cardService.ProvisionCard)
 			r.Post("/card/activate", cardService.ActivateCard)
 			r.Get("/card/{cardId}", cardService.GetCard)
 			r.Put("/card/{cardId}/suspend", cardService.SuspendCard)
+
+			// Voucher endpoints
+			r.Get("/vouchers", voucherService.FetchVouchers)
 
 			// ISO 20022 endpoints
 			r.Post("/iso20022/convert", iso20022Service.ConvertToISO20022)

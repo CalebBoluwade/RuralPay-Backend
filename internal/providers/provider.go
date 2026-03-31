@@ -42,7 +42,7 @@ func NewBasePaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSM
 		HSM:             hsmInstance,
 		Audit:           hsm.NewAuditLogger(),
 		Validator:       services.NewValidationHelper(),
-		notificationSVC: services.NewNotificationService(),
+		notificationSVC: services.NewNotificationService(db),
 	}
 }
 

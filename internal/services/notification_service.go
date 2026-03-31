@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -13,11 +14,13 @@ import (
 	mail "github.com/go-mail/mail/v2"
 	go_expo "github.com/montovaneli/go-expo-notification"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 	"github.com/spf13/viper"
 )
 
 type NotificationService struct {
-	//expoURL      string
+	db *sql.DB
+
 	smtpHost     string
 	smtpPort     int
 	smtpUser     string
@@ -30,9 +33,10 @@ type NotificationService struct {
 	httpClient   *http.Client
 }
 
-func NewNotificationService() *NotificationService {
+func NewNotificationService(db *sql.DB) *NotificationService {
 	return &NotificationService{
-		//expoURL:      "https://exp.host/--/api/v2/push/send",
+		db: db,
+
 		smtpHost:     viper.GetString("smtp.host"),
 		smtpPort:     viper.GetInt("smtp.port"),
 		smtpUser:     viper.GetString("smtp.user"),
@@ -46,6 +50,59 @@ func NewNotificationService() *NotificationService {
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// GetUserNotifications retrieves user notifications for the authenticated user
+// @Summary Get User Notifications
+// @Description Retrieve all user notifications within a time period for the authenticated user
+// @Tags Accounts
+// @Produce json
+// @Success 200 {array} models.Notification
+// @Failure 400 {object} utils.APIErrorResponse
+// @Failure 401 {object} utils.APIErrorResponse
+// @Security BearerAuth
+// @Router /account/notifications [get]
+func (s *NotificationService) GetUserNotifications(w http.ResponseWriter, r *http.Request) {
+	slog.Info("get.user.notifications.start")
+	ctx := r.Context()
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+
+	query := `
+        SELECT id, title, type, message, read, created_at
+        FROM notifications
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT 50
+    `
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		slog.Error("get.user.notifications.query_failed", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, "Failed to fetch user notifications", http.StatusFailedDependency, nil)
+		return
+	}
+	defer rows.Close()
+
+	notifications := make([]models.Notification, 0)
+	for rows.Next() {
+		var n models.Notification
+		var createdAt time.Time
+		if err := rows.Scan(&n.ID, &n.Title, &n.Type, &n.Message, &n.Read, &createdAt); err != nil {
+			slog.Error("account.user.notifications.scan_failed", "user_id", userID, "error", err)
+			continue
+		}
+		n.Time = utils.FormatTime(createdAt)
+		notifications = append(notifications, n)
+	}
+
+	if err = rows.Err(); err != nil {
+		slog.Error("account.user.notifications.rows_error", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, "Failed to process notifications", http.StatusInternalServerError, nil)
+		return
+	}
+
+	slog.Info("account.GetUserNotifications.success", "user_id", userID, "count", len(notifications))
+	utils.SendSuccessResponse(w, utils.ResponseMessage(fmt.Sprintf("%d Notifications Found", len(notifications))), notifications, http.StatusOK)
 }
 
 func (ns *NotificationService) SendPaymentNotification(transaction *models.TransactionRecord, user *models.User, notifType models.NotificationType) error {

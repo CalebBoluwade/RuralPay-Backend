@@ -70,14 +70,6 @@ type Location struct {
 	Address   string  `json:"address" db:"address"`
 }
 
-type Voucher struct {
-	Id                     string   `json:"id"`
-	VoucherCode            string   `json:"voucherCode"`
-	VoucherDesc            string   `json:"voucherDescription"`
-	VoucherType            string   `json:"voucherType" validate:"oneof=FIXED PERCENT"`
-	VoucherDiscountAmount  int64    `json:"VoucherDiscountAmount"`
-	VoucherAllowedServices []string `json:"voucherAllowedServices"`
-}
 
 type AirtimeDataRequest struct {
 	TransactionID string      `json:"transactionId"`

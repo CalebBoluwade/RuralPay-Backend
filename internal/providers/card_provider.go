@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -43,7 +44,7 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 	slog.Info("validate.card.request", "amount", req.Amount)
 
 	if req.FromAccount == "" {
-		return errors.New("Debit Card is required")
+		return errors.New("debit Card is required")
 	}
 	if req.Amount <= 0 {
 		return errors.New("amount must be positive")
@@ -75,6 +76,9 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
 	slog.Info("card.process.start", "tx_id", req.TransactionID)
 
+	//merchantIDStr, _ := ctx.Value("merchantID").(string)
+	//merchantID, _ := strconv.Atoi(merchantIDStr)
+
 	cardReq, ok := req.Metadata["cardPaymentRequest"].(*models.CardPaymentRequest)
 	if !ok {
 		slog.Error("card.process.invalid_request", "tx_id", req.TransactionID)
@@ -85,7 +89,30 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			Message:       "Invalid Card Payment Request",
 			PaymentMode:   models.PaymentModeCard,
 			Timestamp:     time.Now(),
-		}, errors.New("invalid card payment request")
+		}, errors.New("invalid Card Payment Request")
+	}
+
+	//if merchantIdFromContext != cardReq.MerchantID {
+	//	return &models.PaymentResponse{
+	//		Success:       false,
+	//		TransactionID: req.TransactionID,
+	//		Status:        "FAILED",
+	//		Message:       "Payment Merchant Mismatch",
+	//		PaymentMode:   models.PaymentModeCard,
+	//		Timestamp:     time.Now(),
+	//	}, errors.New("payment merchant mismatch")
+	//}
+
+	if p.checkExpiredCard(cardReq.CardInfo.ExpiryDate) {
+		slog.Error("failed.expired.card.validation", "tx_id", req.TransactionID)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        "FAILED",
+			Message:       "Expired Card",
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, errors.New("expired Card")
 	}
 
 	slog.Info("card.process.building_iso8583", "tx_id", req.TransactionID)
@@ -265,11 +292,44 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 	p.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
 
 	slog.Info("card.handle_payment.response", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
-	w.Header().Set("Content-Type", "application/json")
+
 	if response.Success {
-		w.WriteHeader(http.StatusOK)
+		utils.SendSuccessResponse(w, "Payment Processed", response, http.StatusOK)
 	} else {
-		w.WriteHeader(http.StatusBadRequest)
+		utils.SendErrorResponse(w, "Payment Failed", http.StatusBadRequest, nil)
 	}
-	json.NewEncoder(w).Encode(response)
+}
+
+// checkExpiredCard returns true if the card is expired.
+// Format expected: "MM/YY" (e.g., "09/28")
+func (p *CardPaymentProvider) checkExpiredCard(expiryDate string) bool {
+	// 1. Split the MM/YY string
+	parts := strings.Split(expiryDate, "/")
+	if len(parts) != 2 {
+		return true // Treat malformed dates as expired/invalid
+	}
+
+	month, _ := strconv.Atoi(parts[0])
+	yearShort, _ := strconv.Atoi(parts[1])
+
+	// 2. Convert YY to full year (e.g., 28 -> 2028)
+	// This assumes we are in the 21st century.
+	year := 2000 + yearShort
+
+	// 3. Get the current time
+	now := time.Now()
+	currentYear := now.Year()
+	currentMonth := int(now.Month())
+
+	// 4. Compare Year
+	if year < currentYear {
+		return true
+	}
+
+	// 5. If it's the same year, check if the month has passed
+	if year == currentYear && month < currentMonth {
+		return true
+	}
+
+	return false
 }

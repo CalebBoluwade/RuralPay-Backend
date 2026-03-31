@@ -1,11 +1,12 @@
 package hsm
 
 import (
+	"crypto/rsa"
 	"fmt"
 	"log"
 )
 
-// HardwareHSM implements the HSMInterface for a hardware security module.
+// HardwareHSM implements the HSM Interface for a hardware security module.
 type HardwareHSM struct {
 	// Add any fields needed for the hardware HSM, e.g., connection details.
 }
@@ -17,15 +18,23 @@ func NewHardwareHSM() (*HardwareHSM, error) {
 	return &HardwareHSM{}, nil
 }
 
-// GenerateKeyPair for HardwareHSM would typically wrap a call to the hardware device.
-func (h *HardwareHSM) GenerateKeyPair(keyID string) (*KeyPair, error) {
+// generateKeyPairInternal for HardwareHSM would typically wrap a call to the hardware device.
+func (h *HardwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) {
 	// This would be implemented by calling the hardware HSM's key generation function.
 	return nil, fmt.Errorf("hardware HSM GenerateKeyPair not implemented")
 }
 
+func (h *HardwareHSM) GenerateAndSaveKeyPairExternal(keyID string) (*KeyPair, error) {
+	return h.generateKeyPairInternal(keyID)
+}
+
 // GetPublicKey for HardwareHSM.
-func (h *HardwareHSM) GetPublicKey(keyID string) (string, error) {
-	return "", fmt.Errorf("hardware HSM GetPublicKey not implemented")
+func (h *HardwareHSM) GetPublicKey(keyID string) (*rsa.PublicKey, error) {
+	return nil, fmt.Errorf("hardware HSM GetPublicKey not implemented")
+}
+
+func (h *HardwareHSM) GetPrivateKey(keyID string) (*rsa.PrivateKey, error) {
+	return nil, fmt.Errorf("hardware HSM GetPrivateKey not implemented")
 }
 
 // DeleteKey for HardwareHSM.
@@ -44,8 +53,8 @@ func (h *HardwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error
 }
 
 // DecryptData for HardwareHSM.
-func (h *HardwareHSM) DecryptData(keyID string, ciphertext []byte) ([]byte, error) {
-	return nil, fmt.Errorf("hardware HSM DecryptData not implemented")
+func (h *HardwareHSM) DecryptData(keyID string, payload []byte) (string, error) {
+	return "", fmt.Errorf("hardware HSM DecryptData not implemented")
 }
 
 // SignData for HardwareHSM.

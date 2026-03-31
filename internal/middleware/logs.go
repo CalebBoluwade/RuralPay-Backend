@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/spf13/viper"
 )
 
 func StructuredLogger(log *slog.Logger) func(http.Handler) http.Handler {
@@ -16,6 +17,10 @@ func StructuredLogger(log *slog.Logger) func(http.Handler) http.Handler {
 
 			defer func() {
 				attrs := []any{
+					slog.String("app", viper.GetString("app.name")),
+					slog.String("env", viper.GetString("app.env")),
+					slog.String("version", viper.GetString("app.version")),
+					slog.String("service", "api"),
 					slog.String("Method", r.Method),
 					slog.String("RoutePath", r.URL.Path),
 					slog.String("Query", r.URL.RawQuery),
@@ -32,7 +37,7 @@ func StructuredLogger(log *slog.Logger) func(http.Handler) http.Handler {
 				if merchantID, ok := ctx.Value("merchantID").(string); ok && merchantID != "" {
 					attrs = append(attrs, slog.String("MerchantID", merchantID))
 				}
-				log.Info("Completed", attrs...)
+				log.Info("Completed Request", attrs...)
 			}()
 
 			next.ServeHTTP(ww, r)

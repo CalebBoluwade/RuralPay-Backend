@@ -179,10 +179,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     },
                     "401": {
@@ -263,10 +260,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     },
                     "403": {
@@ -311,7 +305,7 @@ const docTemplate = `{
                         "schema": {
                             "type": "array",
                             "items": {
-                                "$ref": "#/definitions/services.Notification"
+                                "$ref": "#/definitions/models.Notification"
                             }
                         }
                     },
@@ -379,10 +373,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -425,33 +416,34 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "object",
-                            "properties": {
-                                "qrCode": {
-                                    "type": "string"
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/utils.APISuccessResponse"
                                 },
-                                "qrImage": {
-                                    "type": "string"
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "qrCode": {
+                                            "type": "string"
+                                        },
+                                        "qrImage": {
+                                            "type": "string"
+                                        }
+                                    }
                                 }
-                            }
+                            ]
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -678,28 +670,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -1564,6 +1547,78 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/encryption/keys": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieves User Signing Public Key",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Keys"
+                ],
+                "summary": "Retrieves User Signing Public Key",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APISuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Creates User Signing Public Key",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Keys"
+                ],
+                "summary": "Creates User Signing Public Key",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APISuccessResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -2440,6 +2495,40 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/vouchers": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve all available vouchers",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Vouchers"
+                ],
+                "summary": "List all vouchers",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.Voucher"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
@@ -2592,6 +2681,29 @@ const docTemplate = `{
         "models.Metadata": {
             "type": "object",
             "additionalProperties": {}
+        },
+        "models.Notification": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "read": {
+                    "type": "boolean"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
         },
         "models.PaymentMode": {
             "type": "string",
@@ -2945,6 +3057,32 @@ const docTemplate = `{
                 }
             }
         },
+        "models.Voucher": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "integer"
+                },
+                "voucherAllowedServices": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "voucherCode": {
+                    "type": "string"
+                },
+                "voucherDescription": {
+                    "type": "string"
+                },
+                "voucherDiscountAmount": {
+                    "type": "integer"
+                },
+                "voucherType": {
+                    "type": "string"
+                }
+            }
+        },
         "services.MerchantStats": {
             "type": "object",
             "properties": {
@@ -2971,29 +3109,6 @@ const docTemplate = `{
                 },
                 "totalProfit": {
                     "type": "number"
-                }
-            }
-        },
-        "services.Notification": {
-            "type": "object",
-            "properties": {
-                "icon": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "message": {
-                    "type": "string"
-                },
-                "read": {
-                    "type": "boolean"
-                },
-                "time": {
-                    "type": "string"
-                },
-                "title": {
-                    "type": "string"
                 }
             }
         },
@@ -3171,6 +3286,35 @@ const docTemplate = `{
                         "WEEKLY",
                         "MONTHLY"
                     ]
+                }
+            }
+        },
+        "utils.APIErrorResponse": {
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "utils.APISuccessResponse": {
+            "type": "object",
+            "properties": {
+                "details": {},
+                "message": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
                 }
             }
         }

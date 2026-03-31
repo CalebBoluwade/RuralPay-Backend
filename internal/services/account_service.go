@@ -50,16 +50,6 @@ type LinkedAccount struct {
 	IsPrimary     bool   `json:"isPrimary"`
 }
 
-// Notification represents a user notification.
-type Notification struct {
-	ID      string `json:"id"`
-	Icon    string `json:"icon"`
-	Title   string `json:"title"`
-	Message string `json:"message"`
-	Time    string `json:"time"`
-	Read    bool   `json:"read"`
-}
-
 func NewAccountService(db *sql.DB, redisClient *redis.Client) *AccountService {
 	return &AccountService{
 		db:              db,
@@ -68,7 +58,7 @@ func NewAccountService(db *sql.DB, redisClient *redis.Client) *AccountService {
 		validator:       validator.New(),
 		bankService:     NewBankService(),
 		qrService:       NewQRService(db, redisClient),
-		notificationSVC: NewNotificationService(),
+		notificationSVC: NewNotificationService(db),
 		isoService:      NewISO20022Service(),
 	}
 }
@@ -152,7 +142,7 @@ func (s *AccountService) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 // @Param accountId query string true "Account ID"
 // @Param bankCode query string false "Bank Code"
 // @Success 200 {object} object{responseCode=string,accountId=string,accountName=string,status=string,source=string}
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} utils.APIErrorResponse
 // @Failure 403 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Security BearerAuth
@@ -450,7 +440,7 @@ func generateVirtualAccountNumber() string {
 // @Produce json
 // @Param request body object{dailyLimit=int64,singleTransactionLimit=int64} true "Limit update request"
 // @Success 200 {object} object{dailyLimit=int64,singleTransactionLimit=int64}
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} utils.APIErrorResponse
 // @Failure 401 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
@@ -739,9 +729,9 @@ func (s *AccountService) ValidateBVNOTP(w http.ResponseWriter, r *http.Request) 
 // @Produce json
 // @Security BearerAuth
 // @Param request body object{amount=int64} true "QR generation request"
-// @Success 200 {object} object{qrCode=string,qrImage=string}
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
+// @Success 200 {object} utils.APISuccessResponse{qrCode=string,qrImage=string}
+// @Failure 400 {object} utils.APIErrorResponse
+// @Failure 401 {object} utils.APIErrorResponse
 // @Router /account/qr [post]
 func (s *AccountService) GenerateQR(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.generate.qr.start")
@@ -793,7 +783,7 @@ func (s *AccountService) GenerateQR(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param token query string true "QR token or EMVCo QR string"
 // @Success 200 {object} object{userId=string,amount=int64}
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} utils.APIErrorResponse
 // @Router /account/qr [get]
 func (s *AccountService) ProcessQR(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.ProcessQR.start")
@@ -824,9 +814,8 @@ func (s *AccountService) ProcessQR(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Param request body object{type=string,amount=int64,currency=string} true "USSD code request"
 // @Success 200 {object} object{ussdCode=string,expiresIn=int}
-// @Failure 400 {object} map[string]string
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
+// @Failure 400 {object} utils.APIErrorResponse
+// @Failure 401 {object} utils.APIErrorResponse
 // @Router /account/ussd [post]
 func (s *AccountService) GenerateUSSDCode(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.GenerateUSSDCode.start")
@@ -899,7 +888,7 @@ func (s *AccountService) GenerateUSSDCode(w http.ResponseWriter, r *http.Request
 // @Produce json
 // @Param request body object{code=string,mobileNo=string} true "Code validation request"
 // @Success 200 {object} USSDCode
-// @Failure 400 {object} map[string]string
+// @Failure 400 {object} utils.APIErrorResponse
 // @Router /ussd/validate [post]
 func (s *AccountService) ValidateUSSDCode(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.ValidateUSSDCode.start")
@@ -974,67 +963,6 @@ func (s *AccountService) GetUserCodes(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("account.GetUserCodes.success", "user_id", userID)
 	utils.SendSuccessResponse(w, "Success", codes, http.StatusOK)
-}
-
-// GetUserNotifications retrieves user notifications for the authenticated user
-// @Summary Get User Notifications
-// @Description Retrieve all user notifications within a time period for the authenticated user
-// @Tags Accounts
-// @Produce json
-// @Success 200 {array} Notification
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Security BearerAuth
-// @Router /account/notifications [get]
-func (s *AccountService) GetUserNotifications(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.GetUserNotifications.start")
-	ctx := r.Context()
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
-
-	query := `
-        SELECT id, title, message, read, created_at
-        FROM notifications
-        WHERE user_id = $1
-        ORDER BY created_at DESC
-        LIMIT 50
-    `
-
-	rows, err := s.db.QueryContext(ctx, query, userID)
-	if err != nil {
-		slog.Error("account.user.notifications.query_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to fetch user notifications", http.StatusFailedDependency, nil)
-		return
-	}
-	defer rows.Close()
-
-	notifications := make([]Notification, 0)
-	for rows.Next() {
-		var n Notification
-		var createdAt time.Time
-		if err := rows.Scan(&n.ID, &n.Title, &n.Message, &n.Read, &createdAt); err != nil {
-			slog.Error("account.user.notifications.scan_failed", "user_id", userID, "error", err)
-			continue
-		}
-		n.Time = utils.FormatTime(createdAt)
-		// Simple icon mapping, can be improved
-		if strings.Contains(strings.ToLower(n.Title), "payment") {
-			n.Icon = "credit-card-check"
-		} else if strings.Contains(strings.ToLower(n.Title), "transfer") {
-			n.Icon = "bank-transfer-in"
-		} else {
-			n.Icon = "shield-alert"
-		}
-		notifications = append(notifications, n)
-	}
-
-	if err = rows.Err(); err != nil {
-		slog.Error("account.user.notifications.rows_error", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to process notifications", http.StatusInternalServerError, nil)
-		return
-	}
-
-	slog.Info("account.GetUserNotifications.success", "user_id", userID, "count", len(notifications))
-	utils.SendSuccessResponse(w, "User notifications retrieved successfully", notifications, http.StatusOK)
 }
 
 // GetBeneficiaries retrieves saved beneficiaries for the authenticated user

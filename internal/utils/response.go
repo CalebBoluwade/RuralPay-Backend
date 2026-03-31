@@ -2,6 +2,7 @@ package utils
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,6 +10,12 @@ import (
 )
 
 type ResponseMessage string
+
+var (
+	ErrSessionNotFound = errors.New("Session Not Found")
+	ErrInvalidSession  = errors.New("Invalid Session")
+	ErrDeviceMismatch  = errors.New("Device Mismatch")
+)
 
 // Error Responses
 const (
@@ -48,13 +55,13 @@ func (e ResponseMessage) Response() string {
 	return string(e)
 }
 
-type ErrorResponse struct {
+type APIErrorResponse struct {
 	Error   string            `json:"errorMessage"`
 	Success bool              `json:"success"`
 	Details map[string]string `json:"details,omitempty"`
 }
 
-type SuccessResponse struct {
+type APISuccessResponse struct {
 	Message string `json:"message"`
 	Success bool   `json:"success"`
 	Details any    `json:"details,omitempty"`
@@ -64,7 +71,7 @@ func SendErrorResponse(w http.ResponseWriter, message ResponseMessage, statusCod
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	errorResp := ErrorResponse{Error: message.Response(), Success: false}
+	errorResp := APIErrorResponse{Error: message.Response(), Success: false}
 	if validationErr != nil {
 		errorResp.Details = make(map[string]string)
 		for _, err := range validationErr.(validator.ValidationErrors) {
@@ -81,6 +88,6 @@ func SendSuccessResponse(w http.ResponseWriter, message ResponseMessage, details
 
 	// w.Header().Set("Cache-Control", "public, max-age=86400")
 
-	successResp := SuccessResponse{Message: message.Response(), Success: true, Details: details}
+	successResp := APISuccessResponse{Message: message.Response(), Success: true, Details: details}
 	json.NewEncoder(w).Encode(successResp)
 }

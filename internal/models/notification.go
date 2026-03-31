@@ -20,6 +20,16 @@ const (
 	ValidateAccount NotificationType = "ValidateAccount"
 )
 
+// Notification represents a user notification.
+type Notification struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Time    string `json:"time"`
+	Read    bool   `json:"read"`
+}
+
 type NotificationPayload struct {
 	UserID        int
 	Type          NotificationType
