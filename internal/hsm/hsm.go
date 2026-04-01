@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 // HSMInterface defines the HSM operations
@@ -56,6 +56,8 @@ type HSMInterface interface {
 
 	// DecryptPII PII Operations
 	DecryptPII(encryptedData string) (string, error)
+	EncryptPAN(pan string) (string, error)
+	DecryptPAN(encrypted string) (string, error)
 }
 
 // SoftwareHSM implements HSMInterface
@@ -115,7 +117,7 @@ func InitHSM(config Config) (HSMInterface, error) {
 	case "software":
 		return NewSoftwareHSM(config)
 	default:
-		return nil, fmt.Errorf("invalid HSMType: %s", config.HSMType)
+		return nil, fmt.Errorf("invalid HSM Type: %s", config.HSMType)
 	}
 }
 
@@ -125,7 +127,7 @@ func NewSoftwareHSM(config Config) (*SoftwareHSM, error) {
 		return nil, errors.New("master Key Required for software HSM")
 	}
 
-	log.Println("Software HSM Initialized Successfully")
+	slog.Info("Software HSM Initialized Successfully")
 
 	// Generate or use provided salt
 	salt := config.Salt
@@ -253,17 +255,27 @@ func (hsm *SoftwareHSM) GetPrivateKey(keyID string) (*rsa.PrivateKey, error) {
 	hsm.mu.RLock()
 	defer hsm.mu.RUnlock()
 
-	keyPair, exists := hsm.keys[keyID]
-	if !exists {
-		return nil, fmt.Errorf("key %s not found", keyID)
+	if keyPair, exists := hsm.keys[keyID]; exists {
+		if !keyPair.IsActive {
+			return nil, fmt.Errorf("key %s is not active", keyID)
+		}
+		return keyPair.PrivateKey, nil
 	}
 
-	if !keyPair.IsActive {
-		return nil, fmt.Errorf("key %s is not active", keyID)
+	// Fall back to PEM file (for keys created by GenerateAndSaveKeyPairExternal)
+	pemPath := filepath.Join(hsm.keyStorePath, fmt.Sprintf("%s.pem", keyID))
+	pemData, err := os.ReadFile(pemPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("key %s not found", keyID)
+		}
+		return nil, fmt.Errorf("failed to read private key file %s: %w", pemPath, err)
 	}
-
-	// Return the pointer directly from your internal struct
-	return keyPair.PrivateKey, nil
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block for key %s", keyID)
+	}
+	return x509.ParsePKCS1PrivateKey(block.Bytes)
 }
 
 // EncryptData encrypts data using AES-GCM
@@ -304,71 +316,65 @@ func (hsm *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, err
 	return result, nil
 }
 
-// DecryptData decrypts AES-GCM encrypted data
+// DecryptData decrypts a hybrid-encrypted payload produced by the client.
+// Format: [2 bytes LE: RSA key len] + [RSA-OAEP encrypted 32-byte key] + [12 bytes: IV] + [NaCl secretbox ciphertext]
+// The client pads the 12-byte IV to 24 bytes (NaCl nonce size) with trailing zeros.
 func (hsm *SoftwareHSM) DecryptData(keyID string, payload []byte) (string, error) {
-	hsm.mu.RLock()
-	defer hsm.mu.RUnlock()
+	slog.Debug("hsm.decrypt_data.start", "key_id", keyID, "payload_len", len(payload))
 
-	if _, exists := hsm.keys[keyID]; !exists {
-		return "", fmt.Errorf("key %s not found", keyID)
+	if len(payload) < 2 {
+		return "", fmt.Errorf("payload too short: got %d bytes", len(payload))
 	}
 
-	if len(payload) < 12 {
-		return "", errors.New("ciphertext too short")
-	}
-	if len(payload) < 14 { // 2 (len) + 12 (nonce) + minimal ciphertext
-		return "", fmt.Errorf("payload too short")
-	}
-
-	// 2. Extract the RSA-encrypted AES key length (First 2 bytes)
-	rsaKeyLen := binary.LittleEndian.Uint16(payload[:2])
-	offset := 2
-
-	// 3. Extract and Decrypt the AES Key using RSA-OAEP
-	encryptedAesKey := payload[offset : offset+int(rsaKeyLen)]
-	offset += int(rsaKeyLen)
-
-	privateKey, err := hsm.GetPrivateKey("app_signing_private")
+	privateKey, err := hsm.GetPrivateKey(keyID)
 	if err != nil {
+		slog.Error("hsm.decrypt_data.get_private_key_failed", "key_id", keyID, "error", err)
 		return "", fmt.Errorf("failed to get private key: %w", err)
 	}
+	slog.Debug("hsm.decrypt_data.private_key_loaded", "key_id", keyID, "key_size_bits", privateKey.Size()*8)
 
-	// Note: Label MUST match the Frontend ("PII_ENCRYPTION")
-	aesKey, err := rsa.DecryptOAEP(
-		sha256.New(),
-		rand.Reader,
-		privateKey, // Your *rsa.PrivateKey
-		encryptedAesKey,
-		[]byte("PII_ENCRYPTION"),
-	)
+	// Extract the RSA-encrypted key length (first 2 bytes, little-endian)
+	rsaKeyLen := int(binary.LittleEndian.Uint16(payload[:2]))
+	offset := 2
+	slog.Debug("hsm.decrypt_data.envelope", "rsa_key_len", rsaKeyLen, "total_payload_len", len(payload))
+
+	if offset+rsaKeyLen+12 > len(payload) {
+		return "", fmt.Errorf("payload too short: need %d bytes, got %d", offset+rsaKeyLen+12, len(payload))
+	}
+
+	// Decrypt the wrapped symmetric key with RSA-OAEP (nil label = WebCrypto default)
+	encryptedKey := payload[offset : offset+rsaKeyLen]
+	offset += rsaKeyLen
+
+	keyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedKey, nil)
 	if err != nil {
+		slog.Error("hsm.decrypt_data.rsa_oaep_failed", "key_id", keyID, "encrypted_key_len", len(encryptedKey), "error", err)
 		return "", fmt.Errorf("RSA decryption failed: %w", err)
 	}
+	if len(keyBytes) != 32 {
+		slog.Error("hsm.decrypt_data.invalid_key_len", "got", len(keyBytes))
+		return "", fmt.Errorf("decrypted key has unexpected length %d, want 32", len(keyBytes))
+	}
+	slog.Debug("hsm.decrypt_data.key_decrypted", "key_len", len(keyBytes))
 
-	// 4. Extract the Nonce (Next 12 bytes)
-	nonce := payload[offset : offset+12]
+	// Build the 24-byte NaCl nonce: 12-byte IV from payload + 12 zero bytes (matches client padding)
+	var nonce [24]byte
+	copy(nonce[:12], payload[offset:offset+12])
 	offset += 12
 
-	// 5. Extract the Ciphertext (Remaining bytes)
 	ciphertext := payload[offset:]
+	slog.Debug("hsm.decrypt_data.secretbox", "ciphertext_len", len(ciphertext))
 
-	// Create AES-GCM cipher
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to create cipher: %w", err)
+	var secretKey [32]byte
+	copy(secretKey[:], keyBytes)
+
+	plaintext, ok := secretbox.Open(nil, ciphertext, &nonce, &secretKey)
+	if !ok {
+		slog.Error("hsm.decrypt_data.secretbox_open_failed", "ciphertext_len", len(ciphertext))
+		return "", fmt.Errorf("secretbox decryption failed: authentication tag mismatch")
 	}
 
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Decrypt data
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", fmt.Errorf("decryption failed: %w", err)
-	}
-
+	slog.Debug("hsm.decrypt_data.success", "plaintext_len", len(plaintext))
 	return string(plaintext), nil
 }
 
@@ -473,20 +479,68 @@ func (hsm *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature st
 	return false, nil
 }
 
+// EncryptPAN encrypts a plaintext PAN for storage using AES-GCM with the master key.
+func (hsm *SoftwareHSM) EncryptPAN(pan string) (string, error) {
+	block, err := aes.NewCipher(hsm.masterKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(pan), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptPAN decrypts a PAN that was encrypted with EncryptPAN.
+func (hsm *SoftwareHSM) DecryptPAN(encrypted string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64: %w", err)
+	}
+	block, err := aes.NewCipher(hsm.masterKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	if err != nil {
+		return "", fmt.Errorf("decryption failed: %w", err)
+	}
+	return string(plaintext), nil
+}
+
 // DecryptPII Decrypts PII Data
 func (hsm *SoftwareHSM) DecryptPII(encryptedData string) (string, error) {
-	// 1. Decode the Base64 "Digital Envelope"
+	slog.Debug("hsm.decrypt_pii.start", "encoded_len", len(encryptedData))
+
 	payload, err := base64.StdEncoding.DecodeString(encryptedData)
 	if err != nil {
+		slog.Error("hsm.decrypt_pii.base64_failed", "error", err)
 		return "", fmt.Errorf("invalid Base64 PII Data: %w", err)
 	}
+	slog.Debug("hsm.decrypt_pii.decoded", "payload_len", len(payload))
 
-	decrypted, err := hsm.DecryptData("app_signing_public", payload)
+	decrypted, err := hsm.DecryptData("app_signing_private", payload)
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt PII: %w", err)
+		slog.Error("hsm.decrypt_pii.failed", "error", err)
+		return "", fmt.Errorf("failed to Decrypt PII: %w", err)
 	}
 
-	return string(decrypted), nil
+	slog.Debug("hsm.decrypt_pii.success")
+	return decrypted, nil
 }
 
 // HashPIN hashes a PIN using Argon2

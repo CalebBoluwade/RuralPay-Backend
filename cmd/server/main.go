@@ -45,12 +45,17 @@ func main() {
 
 	// Initialize PII-masking structured logger
 	logPath := viper.GetString("log.file")
-	structuredLogger, logCloser, err := appLogger.New(logPath, &slog.HandlerOptions{Level: slog.LevelInfo}, appLogger.RotationConfig{
+	dev := viper.GetString("app.env") == "development"
+	logLevel := slog.LevelInfo
+	if dev {
+		logLevel = slog.LevelDebug
+	}
+	structuredLogger, logCloser, err := appLogger.New(logPath, &slog.HandlerOptions{Level: logLevel}, appLogger.RotationConfig{
 		MaxSizeMB:  viper.GetInt("log.max_size_mb"),
 		MaxBackups: viper.GetInt("log.max_backups"),
 		MaxAgeDays: viper.GetInt("log.max_age_days"),
 		Compress:   true,
-	})
+	}, dev)
 	if err != nil {
 		slog.Error("Failed to Initialize logger", "error", err)
 		os.Exit(1)
@@ -124,7 +129,7 @@ func main() {
 	cardService := services.NewCardService(db, hsm)
 	iso20022Service := services.NewISO20022Service()
 	merchantService := services.NewMerchantService(db)
-	transactionQueryService := services.NewTransactionQueryService(db)
+	transactionQueryService := services.NewTransactionQueryService(db, hsm)
 	voucherService := services.NewVoucherService(db)
 
 	// Initialize unified payment handler

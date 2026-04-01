@@ -68,10 +68,27 @@ func init() {
 	_ = viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
 	_ = viper.BindEnv("nibss.bvn_url", "NIBSS_BVN_URL")
 
+	// ISO 20022 signing keys
 	_ = viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")
 	_ = viper.BindEnv("iso20022.nibss_pub_key_path", "ISO20022_NIBSS_PUB_KEY_PATH")
 
-	_ = viper.BindEnv("PII_ENCRYPTION_KEY", "PII_ENCRYPTION_KEY")
+	// NIBSS ISO 20022 per-message-family endpoints
+	_ = viper.BindEnv("nibss.pacs.endpoint.url", "NIBSS_PACS_ENDPOINT_URL")
+	_ = viper.BindEnv("nibss.acmt.endpoint.url", "NIBSS_ACMT_ENDPOINT_URL")
+	_ = viper.BindEnv("nibss.pain.endpoint.url", "NIBSS_PAIN_ENDPOINT_URL")
+
+	// ISO 8583 (card payment settlement)
+	_ = viper.BindEnv("iso8583.base_url", "ISO8583_BASE_URL")
+	_ = viper.BindEnv("iso8583.signing_key_path", "ISO8583_SIGNING_KEY_PATH")
+	_ = viper.BindEnv("iso8583.nibss_pub_key_path", "ISO8583_NIBSS_PUB_KEY_PATH")
+	_ = viper.BindEnv("iso8583.acquiring_institution_id", "ISO8583_ACQUIRING_INSTITUTION_ID")
+	_ = viper.BindEnv("iso8583.forwarding_institution_id", "ISO8583_FORWARDING_INSTITUTION_ID")
+	_ = viper.BindEnv("iso8583.terminal_id", "ISO8583_TERMINAL_ID")
+	_ = viper.BindEnv("iso8583.card_acceptor_id", "ISO8583_CARD_ACCEPTOR_ID")
+	_ = viper.BindEnv("iso8583.card_acceptor_name", "ISO8583_CARD_ACCEPTOR_NAME")
+	_ = viper.BindEnv("iso8583.merchant_category_code", "ISO8583_MERCHANT_CATEGORY_CODE")
+	viper.SetDefault("iso8583.merchant_category_code", "5011")
+
 	_ = viper.BindEnv("log.file", "LOG_FILE")
 	viper.SetDefault("log.file", "./logs/app.log")
 	_ = viper.BindEnv("log.max_size_mb", "LOG_MAX_SIZE_MB")

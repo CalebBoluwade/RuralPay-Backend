@@ -184,19 +184,6 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	locationJSON, _ := json.Marshal(req.Location)
 
 	_, err = tx.ExecContext(ctx, `
-		WITH user_info AS (
-			SELECT a.user_id 
-			FROM accounts a 
-			WHERE a.account_id = $2
-			LIMIT 1
-		),
-		limit_update AS (
-			UPDATE user_limits ul
-			SET updated_at = NOW()
-			FROM user_info ui
-			WHERE ul.user_id = ui.user_id
-			RETURNING ul.user_id
-		)
 		INSERT INTO transactions 
 		(transaction_id, debit_id, credit_id, amount, fee, total_amount, currency, narration, type, payment_mode, status, location, metadata, user_id, created_at, signature)
 		SELECT $3, $2, $4, $5, $6, $1, $7, $8, $9, 'BANK_TRANSFER', 'PENDING', $10, $11, ui.user_id, NOW(), $12
@@ -269,7 +256,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
 	if err != nil {
 		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
-		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_ISO_CONVERSION", req.TransactionID); dbErr != nil {
+		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_ISO_CONVERSION", req.TransactionID); dbErr != nil {
 			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 		}
 		return err, true
@@ -281,11 +268,11 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
 		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
 		if shouldReverse {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
+			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 			}
 		} else {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
+			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 			}
 		}
@@ -294,7 +281,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 
 	slog.Info("bank_transfer.settlement.success", "tx_id", req.TransactionID, "status", resp.Status)
 	respJSON, _ := json.Marshal(resp)
-	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2 WHERE transaction_id = $3`, "SETTLED", respJSON, req.TransactionID); dbErr != nil {
+	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, "SETTLED", respJSON, req.TransactionID); dbErr != nil {
 		slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 	}
 	return nil, false

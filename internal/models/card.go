@@ -31,7 +31,8 @@ type CardInfo struct {
 	ATC           int    `json:"ATC"`
 	CVR           string `json:"CVR"`
 	IssuerAppData string `json:"issuerAppData"`
-	CountryCode   string `json:"countryCode"`
+	// CountryCode   string `json:"countryCode"`
+	CurrencyCode string `json:"currencyCode"`
 }
 
 type CardPaymentRequest struct {
@@ -55,6 +56,7 @@ type ISO8583Service interface {
 	ProcessMessage(ctx context.Context, rawMsg []byte) ([]byte, error)
 	BuildAuthorizationResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
 	BuildFinancialResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
+	SignAndSealPayload(payload []byte) ([]byte, error)
 }
 
 type AuthorizationRequest struct {

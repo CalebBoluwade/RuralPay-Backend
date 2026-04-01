@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -48,26 +47,6 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 	}
 	if req.Amount <= 0 {
 		return errors.New("amount must be positive")
-	}
-
-	var balance int64
-	var status string
-	err := p.DB.QueryRowContext(ctx, `SELECT balance, status FROM accounts WHERE card_id = $1`, req.FromAccount).Scan(&balance, &status)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return errors.New("card not found")
-		}
-		slog.Error("card.validate.db_error", "error", err)
-		return errors.New(string(utils.ValidationError))
-	}
-
-	if status != "ACTIVE" {
-		return errors.New("card not active")
-	}
-
-	if balance < req.Amount {
-		return errors.New("insufficient balance")
 	}
 
 	return nil
@@ -115,10 +94,10 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, errors.New("expired Card")
 	}
 
-	slog.Info("card.process.building_iso8583", "tx_id", req.TransactionID)
+	slog.Info("card.process.building_ISO8583", "tx_id", req.TransactionID)
 	isoMsg, err := p.iso8583Service.BuildISO8583Message(cardReq)
 	if err != nil {
-		slog.Error("card.process.iso8583_build_failed", "tx_id", req.TransactionID, "error", err)
+		slog.Error("card.process.ISO8583_build_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -131,12 +110,12 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 
 	_, err = p.iso8583Service.ProcessMessage(ctx, isoMsg)
 	if err != nil {
-		slog.Error("card.process.iso8583_process_failed", "tx_id", req.TransactionID, "error", err)
+		slog.Error("card.process.ISO8583_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       "Payment Processing Failed",
+			Message:       utils.ProcessingFailed.Response(),
 			PaymentMode:   models.PaymentModeCard,
 			Timestamp:     time.Now(),
 		}, err
@@ -169,6 +148,21 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 
 	slog.Info("card.process.inserting", "tx_id", req.TransactionID)
 
+	// Encrypt PAN for storage in debit_id
+	encryptedPAN, err := p.HSM.EncryptPAN(req.FromAccount)
+	if err != nil {
+		slog.Error("card.process.pan_encrypt_failed", "tx_id", req.TransactionID, "error", err)
+		return nil, errors.New("failed to secure card data")
+	}
+
+	// Resolve merchant account_id for credit side
+	var merchantAccountID string
+	err = tx.QueryRowContext(ctx, `SELECT account_id FROM merchants WHERE id = $1`, cardReq.MerchantID).Scan(&merchantAccountID)
+	if err != nil {
+		slog.Error("card.process.merchant_lookup_failed", "tx_id", req.TransactionID, "merchant_id", cardReq.MerchantID, "error", err)
+		return nil, errors.New("merchant not found")
+	}
+
 	// Update metadata with signing info
 	if req.Metadata == nil {
 		req.Metadata = make(map[string]any)
@@ -178,24 +172,10 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	metadataJSON, _ := json.Marshal(req.Metadata)
 
 	_, err = tx.ExecContext(ctx, `
-		WITH merchant_info AS (
-			SELECT m.account_id 
-			FROM merchants m 
-			WHERE m.id = $2 
-			LIMIT 1
-		),
-		limit_update AS (
-			UPDATE user_limits ul
-			SET updated_at = NOW()
-			FROM user_info ui
-			WHERE ul.user_id = ui.user_id
-			RETURNING ul.user_id
-		)
-		INSERT INTO transactions 
+		INSERT INTO transactions
 		(transaction_id, debit_id, credit_id, amount, total_amount, type, payment_mode, status, user_id, created_at, signature, metadata)
-		SELECT $1, $2, $3, $4, $4, 'DEBIT', 'CARD', 'COMPLETED', ui.user_id, NOW(), $5, $6
-		FROM user_info ui
-	`, req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, signature, metadataJSON)
+		VALUES ($1, $2, $3, $4, $4, 'DEBIT', 'CARD', 'COMPLETED', $5, NOW(), $6, $7)
+	`, req.TransactionID, encryptedPAN, merchantAccountID, req.Amount, req.UserID, signature, metadataJSON)
 
 	if err != nil {
 		slog.Error("card.process.insert_failed", "tx_id", req.TransactionID, "error", err)
@@ -207,22 +187,36 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		return nil, err
 	}
 
-	resp, err := p.nibssClient.ProcessCardSettlement(isoMsg)
+	slog.Info("card.process.sealing_for_nibss", "tx_id", req.TransactionID)
+	sealedMsg, err := p.iso8583Service.SignAndSealPayload(isoMsg)
 	if err != nil {
-		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
-		p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)
+		slog.Error("card.process.sign_and_seal_failed", "tx_id", req.TransactionID, "error", err)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       fmt.Sprintf("Settlement Failed: %v", err),
+			Message:       utils.ProcessingFailed.Response(),
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+
+	resp, err := p.nibssClient.ProcessCardSettlement(sealedMsg)
+	if err != nil {
+		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
+		p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        "FAILED",
+			Message:       utils.ProcessingFailed.Response(),
 			PaymentMode:   models.PaymentModeCard,
 			Timestamp:     time.Now(),
 		}, err
 	}
 
 	respJSON, _ := json.Marshal(resp)
-	p.DB.Exec(`UPDATE transactions SET settlement_response = $1 WHERE transaction_id = $2`, respJSON, req.TransactionID)
+	p.DB.Exec(`UPDATE transactions SET settlement_response = $1, updated_at = NOW() WHERE transaction_id = $2`, respJSON, req.TransactionID)
 
 	slog.Info("card.process.success", "tx_id", req.TransactionID)
 	return &models.PaymentResponse{
@@ -236,11 +230,13 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 }
 
 func (p *CardPaymentProvider) DecryptPIICredentials(encryptedText string) string {
+	slog.Debug("card.decrypt_pii.start", "encoded_len", len(encryptedText))
 	plaintext, err := p.HSM.DecryptPII(encryptedText)
 	if err != nil {
-		slog.Error("card.decrypt_pii_failed", "error", err)
+		slog.Error("card.decrypt_pii_failed", "encoded_len", len(encryptedText), "error", err)
 		return ""
 	}
+	slog.Debug("card.decrypt_pii.success", "plaintext_len", len(plaintext))
 	return plaintext
 }
 
@@ -267,11 +263,35 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	decryptedPAN := p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN)
+	if decryptedPAN == "" {
+		slog.Error("card.handle_payment.decrypt_failed", "tx_id", cardReq.TransactionID)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusFailedDependency, nil)
+		return
+	}
+
+	if cachedStatus, found := p.checkIdempotency(cardReq.TransactionID); found {
+		slog.Info("card.handle_payment.idempotent", "tx_id", cardReq.TransactionID, "cached_status", cachedStatus)
+		if cachedStatus == "COMPLETED" || cachedStatus == "PENDING" {
+			utils.SendSuccessResponse(w, "Payment Already Processed", map[string]any{
+				"transactionId": cardReq.TransactionID,
+				"status":        cachedStatus,
+				"paymentMode":   models.PaymentModeCard,
+			}, http.StatusOK)
+		} else {
+			utils.SendErrorResponse(w, "Payment Failed", http.StatusBadRequest, nil)
+		}
+		return
+	}
+
+	// Reserve the transaction ID before processing to prevent duplicate inserts on retry
+	p.setIdempotency(cardReq.TransactionID, "PENDING")
+
 	req := &models.PaymentRequest{
 		TransactionID:            cardReq.TransactionID,
 		UserID:                   strconv.Itoa(userID),
-		FromAccount:              p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN),
-		BeneficiaryAccountNumber: p.DecryptPIICredentials(cardReq.CardInfo.EncryptedPAN),
+		FromAccount:              decryptedPAN,
+		BeneficiaryAccountNumber: decryptedPAN,
 		Amount:                   cardReq.Amount,
 		PaymentMode:              models.PaymentModeCard,
 		Metadata: map[string]any{
@@ -282,9 +302,10 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 
 	response, err := p.ProcessPayment(r.Context(), req)
 	if err != nil {
-		slog.Error("card.handle_payment.failed", "tx_id", req.TransactionID, "error", err)
+		slog.Error("card.handle_payment.failed", "tx_id", req.TransactionID, "err", err)
+		p.setIdempotency(req.TransactionID, "FAILED")
 		p.Audit.LogError(req.TransactionID, req.FromAccount, err)
-		utils.SendErrorResponse(w, "Payment Processing Failed", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -296,7 +317,7 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 	if response.Success {
 		utils.SendSuccessResponse(w, "Payment Processed", response, http.StatusOK)
 	} else {
-		utils.SendErrorResponse(w, "Payment Failed", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 	}
 }
 

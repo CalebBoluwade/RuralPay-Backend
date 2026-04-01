@@ -111,3 +111,13 @@ func (h *HardwareHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 func (h *HardwareHSM) DecryptPII(encryptedData string) (string, error) {
 	return "", fmt.Errorf("hardware HSM DecryptPII not implemented")
 }
+
+// EncryptPAN for HardwareHSM.
+func (h *HardwareHSM) EncryptPAN(pan string) (string, error) {
+	return "", fmt.Errorf("hardware HSM EncryptPAN not implemented")
+}
+
+// DecryptPAN for HardwareHSM.
+func (h *HardwareHSM) DecryptPAN(encrypted string) (string, error) {
+	return "", fmt.Errorf("hardware HSM DecryptPAN not implemented")
+}

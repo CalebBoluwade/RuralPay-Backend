@@ -179,7 +179,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("auth.login.request", "identifier", req.Identifier)
+	slog.Info("auth.login.request", "LoginRequest", req)
 
 	var user models.User
 	var hashedPassword string

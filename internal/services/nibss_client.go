@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -15,14 +17,17 @@ import (
 )
 
 type NIBSSClient struct {
-	mandateBaseURL    string
-	settlementBaseURL string
-	bvnBaseURL        string
-	apiKey            string
-	httpClient        *http.Client
-	circuitBreaker    *gobreaker.CircuitBreaker
-	bvnBreaker        *gobreaker.CircuitBreaker
-	mandateBreaker    *gobreaker.CircuitBreaker
+	mandateBaseURL string
+	iso8583BaseURL string // ISO 8583 card settlement
+	bvnBaseURL     string
+	pacsURL        string // ISO 20022 pacs (pacs.008, pacs.002, pacs.028)
+	acmtURL        string // ISO 20022 acmt (acmt.023, acmt.024)
+	painURL        string // ISO 20022 pain
+	apiKey         string
+	httpClient     *http.Client
+	circuitBreaker *gobreaker.CircuitBreaker
+	bvnBreaker     *gobreaker.CircuitBreaker
+	mandateBreaker *gobreaker.CircuitBreaker
 }
 
 type BVNVerifyRequest struct {
@@ -72,7 +77,7 @@ type IdentificationVerificationResponse struct {
 
 func (c *NIBSSClient) VerifyAccountIdentification(xmlData []byte) (*IdentificationVerificationResponse, error) {
 	body, err := c.mandateBreaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/acmt/identification-verification", c.mandateBaseURL), bytes.NewBuffer(xmlData))
+		req, err := http.NewRequest("POST", c.acmtURL, bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create acmt.023 request: %w", err)
 		}
@@ -104,30 +109,28 @@ func (c *NIBSSClient) VerifyAccountIdentification(xmlData []byte) (*Identificati
 	return body.(*IdentificationVerificationResponse), nil
 }
 
+func fallback(primary, fallbackURL string) string {
+	if primary != "" {
+		return primary
+	}
+	return fallbackURL
+}
+
 func NewNIBSSClient() *NIBSSClient {
-	baseURL := viper.GetString("nibss.base_url")
-	mandateURL := viper.GetString("nibss.mandate_url")
-	if mandateURL == "" {
-		mandateURL = baseURL
-	}
-	settlementURL := viper.GetString("nibss.settlement_url")
-	if settlementURL == "" {
-		settlementURL = baseURL
-	}
-	bvnURL := viper.GetString("nibss.bvn_url")
-	if bvnURL == "" {
-		bvnURL = baseURL
-	}
+	nibssBase := viper.GetString("nibss.base_url")
 
 	return &NIBSSClient{
-		mandateBaseURL:    mandateURL,
-		settlementBaseURL: settlementURL,
-		bvnBaseURL:        bvnURL,
-		apiKey:            viper.GetString("nibss.api_key"),
-		httpClient:        &http.Client{Timeout: 30 * time.Second},
-		circuitBreaker:    circuitbreaker.Get("NIBSS-Settlement", circuitbreaker.NIBSSSettlementSettings()),
-		bvnBreaker:        circuitbreaker.Get("NIBSS-BVN", circuitbreaker.NIBSSBVNSettings()),
-		mandateBreaker:    circuitbreaker.Get("NIBSS-Mandate", circuitbreaker.NIBSSMandateSettings()),
+		mandateBaseURL: fallback(viper.GetString("nibss.mandate_url"), nibssBase),
+		bvnBaseURL:     fallback(viper.GetString("nibss.bvn_url"), nibssBase),
+		iso8583BaseURL: fallback(viper.GetString("iso8583.base_url"), nibssBase),
+		pacsURL:        fallback(viper.GetString("nibss.pacs.endpoint.url"), nibssBase),
+		acmtURL:        fallback(viper.GetString("nibss.acmt.endpoint.url"), nibssBase),
+		painURL:        fallback(viper.GetString("nibss.pain.endpoint.url"), nibssBase),
+		apiKey:         viper.GetString("nibss.api_key"),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		circuitBreaker: circuitbreaker.Get("NIBSS-Settlement", circuitbreaker.NIBSSSettlementSettings()),
+		bvnBreaker:     circuitbreaker.Get("NIBSS-BVN", circuitbreaker.NIBSSBVNSettings()),
+		mandateBreaker: circuitbreaker.Get("NIBSS-Mandate", circuitbreaker.NIBSSMandateSettings()),
 	}
 }
 
@@ -216,7 +219,7 @@ func (c *NIBSSClient) GetAccountMandate(bankCode, accountNumber string) (*Mandat
 
 func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
 	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/funds-transfer", c.settlementBaseURL), bytes.NewBuffer(xmlData))
+		req, err := http.NewRequest("POST", c.pacsURL, bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -250,7 +253,7 @@ func (c *NIBSSClient) ProcessFundsTransferSettlement(xmlData []byte) (*pacs_v08.
 
 func (c *NIBSSClient) RequestPaymentStatus(xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
 	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/payment-status", c.settlementBaseURL), bytes.NewBuffer(xmlData))
+		req, err := http.NewRequest("POST", c.pacsURL, bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create pacs.028 request: %w", err)
 		}
@@ -284,7 +287,7 @@ func (c *NIBSSClient) RequestPaymentStatus(xmlData []byte) (*pacs_v08.FIToFIPaym
 
 func (c *NIBSSClient) ProcessCardSettlement(xmlData []byte) (*CardSettlementResponse, error) {
 	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/card", c.settlementBaseURL), bytes.NewBuffer(xmlData))
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/settlement/card", c.iso8583BaseURL), bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
@@ -301,7 +304,11 @@ func (c *NIBSSClient) ProcessCardSettlement(xmlData []byte) (*CardSettlementResp
 		if resp.StatusCode >= 500 {
 			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
 		}
+
 		if resp.StatusCode != http.StatusOK {
+			var respBody []byte
+			respBody, _ = io.ReadAll(resp.Body)
+			slog.Error("NIBSS API Response", "status", resp.StatusCode, "body", string(respBody))
 			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
 		}
 

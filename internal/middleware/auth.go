@@ -121,7 +121,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 		if err := validateSession(ctx, utils.SessionKeyPrefix+sid, deviceID); err != nil {
 			if errors.Is(err, utils.ErrSessionNotFound) || errors.Is(err, utils.ErrInvalidSession) {
-				validator.SendErrorResponse(w, "Session Locked - User Presence Required", http.StatusUnauthorized, nil)
+				validator.SendErrorResponse(w, "Session Locked - User Presence Required", http.StatusLocked, nil)
 				return
 			}
 
@@ -180,7 +180,7 @@ func validateToken(tokenString string) (string, any, error) {
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected Signing Method --> %v", token.Header["alg"])
+			return nil, fmt.Errorf("unexpected Signing Method --> %v", token.Header["alg"])
 		}
 		return []byte(viper.GetString("jwt.secret_key")), nil
 	})

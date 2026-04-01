@@ -26,20 +26,21 @@ type DeviceInfo struct {
 // LoginRequest represents the login request payload
 // @Description Login request structure
 type LoginRequest struct {
-	Identifier string     `json:"identifier" validate:"required,max=254" example:"+2348012345678"` // User phone number, email, or username
-	Password   string     `json:"password" validate:"required,min=6,max=72"`                      // User password
-	DeviceInfo DeviceInfo `json:"deviceInfo" validate:"required"`                             // Device information for login
+	Identifier    string     `json:"identifier" validate:"required,max=254" example:"+2348012345678"`         // User phone number, email, or username
+	Password      string     `json:"password" validate:"required,min=6,max=72"`                               // User password
+	DeviceInfo    DeviceInfo `json:"deviceInfo" validate:"required"`                                          // Device information for login
+	ExpoPushToken string     `json:"pushToken,omitempty" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 }
 
 // RegisterRequest represents the registration request payload
 // @Description Registration request structure
 type RegisterRequest struct {
-	Email         string `json:"Email" validate:"required,email,max=254" example:"user@example.com"`                  // User email address
-	Username      string `json:"Username" validate:"required,min=3,max=30,alphanum" example:"johndoe"`               // Username
+	Email         string `json:"Email" validate:"required,email,max=254" example:"user@example.com"`                // User email address
+	Username      string `json:"Username" validate:"required,min=3,max=30,alphanum" example:"johndoe"`              // Username
 	Password      string `json:"Password" validate:"required,min=6,max=72"`                                         // User password
-	FirstName     string `json:"FirstName" validate:"required,min=2,max=50" example:"John"`                        // User first name
-	LastName      string `json:"LastName" validate:"required,min=2,max=50" example:"Doe"`                          // User last name
-	BVN           string `json:"BVN" validate:"required,len=11,numeric" example:"12345678901"`                     // Bank Verification Number
+	FirstName     string `json:"FirstName" validate:"required,min=2,max=50" example:"John"`                         // User first name
+	LastName      string `json:"LastName" validate:"required,min=2,max=50" example:"Doe"`                           // User last name
+	BVN           string `json:"BVN" validate:"required,len=11,numeric" example:"12345678901"`                      // Bank Verification Number
 	PhoneNumber   string `json:"PhoneNumber" validate:"required,min=10,max=15" example:"+2348012345678"`            // Phone number
 	ExpoPushToken string `json:"pushToken" validate:"required" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 }

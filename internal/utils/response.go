@@ -32,7 +32,7 @@ const (
 	FetchTransaction     ResponseMessage = "Failed to Fetch Transaction"
 	SingleLimitError     ResponseMessage = "Single Transaction Limit Cannot Exceed Daily Limit"
 	PaymentFailed        ResponseMessage = "Payment Processing Failed"
-	ProcessingFailed     ResponseMessage = "Unable to Process this request at this time"
+	ProcessingFailed     ResponseMessage = "Unable to Process Payment Request at this time"
 	InvalidPaymentMode   ResponseMessage = "Invalid Payment Mode"
 	OTPGenerationError   ResponseMessage = "Failed to Generate OTP"
 
