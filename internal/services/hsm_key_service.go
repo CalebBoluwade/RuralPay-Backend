@@ -106,7 +106,11 @@ func (s *HSMKeyService) getKeyTypeAndSize(keyID, publicKeyPEM string) (string, i
 // @Failure 401 {object} utils.APIErrorResponse
 // @Router /encryption/keys [put]
 func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.Request) {
-	slog.Info("create.key.pair.external")
+	ctx := req.Context()
+	userId, _ := utils.ExtractUserMerchantInfoFromContext(w, ctx)
+
+	slog.Info("create.key.pair.external", "user_id", userId)
+
 	_, err := s.hsm.GenerateAndSaveKeyPairExternal("app_signing")
 	if err != nil {
 		slog.ErrorContext(req.Context(), "failed to generate key pair external for app_signing: %v", err)
@@ -121,7 +125,6 @@ func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.R
 // @Description Retrieves User Signing Public Key
 // @Tags Keys
 // @Produce json
-// @Security BearerAuth
 // @Success 200 {object} utils.APISuccessResponse
 // @Failure 400 {object} utils.APIErrorResponse
 // @Failure 401 {object} utils.APIErrorResponse

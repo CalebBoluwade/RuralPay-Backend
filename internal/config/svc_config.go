@@ -72,6 +72,15 @@ func init() {
 	_ = viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")
 	_ = viper.BindEnv("iso20022.nibss_pub_key_path", "ISO20022_NIBSS_PUB_KEY_PATH")
 
+	// ISO 20022 callback authentication
+	_ = viper.BindEnv("iso20022.callback.hmac_secret", "ISO20022_CALLBACK_HMAC_SECRET")
+	_ = viper.BindEnv("iso20022.callback.tls.enabled", "ISO20022_CALLBACK_TLS_ENABLED")
+	viper.SetDefault("iso20022.callback.tls.enabled", false)
+	_ = viper.BindEnv("iso20022.callback.tls.allowed_issuers", "ISO20022_CALLBACK_TLS_ALLOWED_ISSUERS")
+	_ = viper.BindEnv("iso20022.callback.tls.whitelisted_serials", "ISO20022_CALLBACK_TLS_WHITELISTED_SERIALS")
+	_ = viper.BindEnv("iso20022.callback.require_auth", "ISO20022_CALLBACK_REQUIRE_AUTH")
+	viper.SetDefault("iso20022.callback.require_auth", true)
+
 	// NIBSS ISO 20022 per-message-family endpoints
 	_ = viper.BindEnv("nibss.pacs.endpoint.url", "NIBSS_PACS_ENDPOINT_URL")
 	_ = viper.BindEnv("nibss.acmt.endpoint.url", "NIBSS_ACMT_ENDPOINT_URL")

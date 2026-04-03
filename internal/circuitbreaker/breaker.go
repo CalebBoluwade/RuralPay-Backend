@@ -79,3 +79,16 @@ func NIBSSMandateSettings() gobreaker.Settings {
 		},
 	}
 }
+
+// NIBSSISO20022Settings returns the standard settings for the NIBSS ISO 20022 breaker (ACMT/PACS).
+func NIBSSISO20022Settings() gobreaker.Settings {
+	return gobreaker.Settings{
+		MaxRequests: 2,
+		Interval:    60 * time.Second,
+		Timeout:     45 * time.Second,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			return counts.Requests >= 5 &&
+				float64(counts.TotalFailures)/float64(counts.Requests) >= 0.5
+		},
+	}
+}

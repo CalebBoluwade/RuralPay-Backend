@@ -104,13 +104,12 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 				ToAccountID:   req.BeneficiaryAccountNumber,
 				Amount:        req.Amount,
 				Currency:      req.Currency,
-				Status:        response.Status,
+				Status:        "FAILED",
 				CreatedAt:     time.Now(),
 				Metadata: map[string]any{
 					"beneficiaryName":     req.BeneficiaryAccountName,
 					"paymentMode":         req.PaymentMode,
 					"beneficiaryBankName": req.BeneficiaryBankName,
-					"reference":           response.Reference,
 				},
 			}, user, models.PaymentFailed)
 

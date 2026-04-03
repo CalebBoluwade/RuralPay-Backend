@@ -2,7 +2,7 @@ package hsm
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 )
 
@@ -64,5 +64,5 @@ func (a *AuditLogger) LogOperation(transactionId, accountID, operation, details 
 
 func (a *AuditLogger) log(event AuditEvent) {
 	data, _ := json.Marshal(event)
-	log.Printf("AUDIT: %s", string(data))
+	slog.Debug("AUDIT: %s", string(data))
 }

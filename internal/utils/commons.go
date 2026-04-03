@@ -2,7 +2,10 @@ package utils
 
 import (
 	"context"
-	"log"
+	cryptorand "crypto/rand"
+	"fmt"
+	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,7 +17,7 @@ var BlacklistKeyPrefix = "BLACKLIST:"
 func ExtractUserMerchantInfoFromContext(w http.ResponseWriter, ctx context.Context) (int, int) {
 	userIDStr, ok := ctx.Value("userID").(string)
 	if !ok || userIDStr == "" {
-		log.Printf("Unauthorized: User ID Not Found in Context")
+		slog.Error("Unauthorized: User ID Not Found in Context")
 		SendErrorResponse(w, UnauthorizedError, http.StatusUnauthorized, nil)
 	}
 
@@ -34,4 +37,24 @@ func FormatTime(t time.Time) string {
 		return strconv.FormatFloat(duration.Hours(), 'f', 0, 64) + " hr ago"
 	}
 	return t.Format("Jan 2, 2006")
+}
+
+func GenerateOTP() string {
+	b := make([]byte, 4)
+	_, _ = cryptorand.Read(b)
+	return fmt.Sprintf("%08d", (int(b[0])<<24|int(b[1])<<16|int(b[2])<<8|int(b[3]))%100000000)
+}
+
+const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+func GenerateImageIdentityToken() string {
+	length := 32
+	token := make([]byte, length)
+
+	for i := 0; i < length; i++ {
+		n, _ := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(charset))))
+		token[i] = charset[n.Int64()]
+	}
+
+	return string(token)
 }

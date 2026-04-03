@@ -201,7 +201,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		}, err
 	}
 
-	resp, err := p.nibssClient.ProcessCardSettlement(sealedMsg)
+	resp, err := p.nibssClient.ProcessCardSettlement(ctx, sealedMsg)
 	if err != nil {
 		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
 		p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)

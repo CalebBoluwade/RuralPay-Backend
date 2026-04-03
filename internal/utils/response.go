@@ -19,6 +19,7 @@ var (
 
 // Error Responses
 const (
+	InvalidCreds         ResponseMessage = "Invalid Credentials"
 	AccountNotFoundError ResponseMessage = "Account Not Found"
 	UserNotFoundError    ResponseMessage = "User Not Found"
 	TokenError           ResponseMessage = "Invalid or Expired Reset Token"

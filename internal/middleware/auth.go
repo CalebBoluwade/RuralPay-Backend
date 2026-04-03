@@ -54,14 +54,19 @@ func checkTokenBlacklist(token string) bool {
 
 func parseSessionClaims(token string) (sid, deviceID string, err error) {
 	claims := jwt.MapClaims{}
-	jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+	_, err = jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		return []byte(viper.GetString("jwt.secret_key")), nil
 	})
+
+	if err != nil {
+		return "", "", fmt.Errorf("failed to Parse JWToken: %w", err)
+	}
+
 	var hasSid, hasDeviceID bool
 	sid, hasSid = claims["sid"].(string)
 	deviceID, hasDeviceID = claims["did"].(string)
 	if !hasSid || !hasDeviceID {
-		return "", "", fmt.Errorf("missing session claims")
+		return "", "", fmt.Errorf("missing Session Claims")
 	}
 	return sid, deviceID, nil
 }

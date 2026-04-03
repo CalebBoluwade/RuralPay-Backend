@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"log"
@@ -59,7 +60,7 @@ func main() {
 	fmt.Println("=== Sending to Settlement ===")
 
 	// Send to settlement system
-	v, err := iso20022Service.SendToSettlement(pacs008)
+	v, err := iso20022Service.SendToSettlement(context.Background(), pacs008)
 	if err != nil {
 		log.Fatalf("Failed to send to settlement: %v", err)
 	}

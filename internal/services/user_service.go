@@ -17,6 +17,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
 	"github.com/spf13/viper"
@@ -28,12 +29,14 @@ type UserService struct {
 	redis           *redis.Client
 	validator       *validator.Validate
 	notificationSvc *NotificationService
+	hsm             hsm.HSMInterface
 }
 
-func NewUserService(db *sql.DB, redisClient *redis.Client, notificationService *NotificationService) *UserService {
+func NewUserService(db *sql.DB, redisClient *redis.Client, hsmInstance hsm.HSMInterface, notificationService *NotificationService) *UserService {
 	return &UserService{
 		db:              db,
 		redis:           redisClient,
+		hsm:             hsmInstance,
 		validator:       validator.New(),
 		notificationSvc: notificationService,
 	}
@@ -79,12 +82,12 @@ func (s *UserService) RegisterNewUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("auth.register.request")
+	slog.Debug("auth.register.request", "req", req)
 
 	hashedPassword, err := hashPassword(req.Password)
 	if err != nil {
 		slog.Error("auth.register.hash_failed", "error", err)
-		utils.SendErrorResponse(w, "An Internal Error Occurred", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -104,17 +107,17 @@ func (s *UserService) RegisterNewUser(w http.ResponseWriter, r *http.Request) {
 	var userID int
 	err = tx.QueryRow(`
 		WITH new_user AS (
-			INSERT INTO users (email, username, password, first_name, last_name, account_id, bvn, phone_number, push_token)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			INSERT INTO users (email, username, password, first_name, last_name, account_id, bvn, phone_number, push_token, identityToken)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			RETURNING id
 		),
 		new_limits AS (
 			INSERT INTO user_limits (user_id, daily_limit, single_transaction_limit, updated_at)
-			SELECT id, $10, $11, NOW() FROM new_user
+			SELECT id, $11, $12, NOW() FROM new_user
 			RETURNING user_id
 		)
 		SELECT id FROM new_user
-	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, req.ExpoPushToken, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
+	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, req.ExpoPushToken, req.IdentityToken, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
 	if err != nil {
 		slog.Error("auth.register.user_creation_failed", "error", err)
 		utils.SendErrorResponse(w, "Email or Username Already Exists", http.StatusConflict, nil)
@@ -179,7 +182,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("auth.login.request", "LoginRequest", req)
+	slog.Debug("auth.login.request", "LoginRequest", req)
 
 	var user models.User
 	var hashedPassword string
@@ -216,7 +219,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			slog.Warn("auth.login.user_not_found")
-			utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+			utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
 		} else {
 			slog.Error("auth.login.db_error", "error", err)
 			utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
@@ -224,9 +227,16 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !verifyPassword(req.Password, hashedPassword) {
+	decryptedPassword, err := s.hsm.DecryptPII(req.Password)
+	if err != nil {
+		slog.Error("auth.login.decrypt_failed", "error", err)
+		utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
+		return
+	}
+
+	if !verifyPassword(decryptedPassword, hashedPassword) {
 		slog.Warn("auth.login.invalid_password")
-		utils.SendErrorResponse(w, "Invalid Credentials", http.StatusUnauthorized, nil)
+		utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
 		return
 	}
 

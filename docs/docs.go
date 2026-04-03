@@ -72,54 +72,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/account/beneficiaries": {
-            "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
-                "description": "Retrieve all saved beneficiaries for the authenticated user",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Accounts"
-                ],
-                "summary": "Get beneficiaries",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "beneficiaries": {
-                                    "type": "array"
-                                }
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/account/limits": {
             "put": {
                 "security": [
@@ -309,22 +261,16 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -675,12 +621,6 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/utils.APIErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/utils.APIErrorResponse"
                         }
@@ -1554,11 +1494,6 @@ const docTemplate = `{
         },
         "/encryption/keys": {
             "get": {
-                "security": [
-                    {
-                        "BearerAuth": []
-                    }
-                ],
                 "description": "Retrieves User Signing Public Key",
                 "produces": [
                     "application/json"
@@ -1619,6 +1554,32 @@ const docTemplate = `{
                         "description": "Unauthorized",
                         "schema": {
                             "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "Checks the health of database and Redis connections",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Deep Health Check",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.HealthStatus"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.HealthStatus"
                         }
                     }
                 }
@@ -2239,7 +2200,7 @@ const docTemplate = `{
                 }
             }
         },
-        "/payments": {
+        "/payment": {
             "post": {
                 "security": [
                     {
@@ -2295,6 +2256,54 @@ const docTemplate = `{
                     },
                     "403": {
                         "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/payment/beneficiaries": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Retrieve all saved beneficiaries for the authenticated user",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Get beneficiaries",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "beneficiaries": {
+                                    "type": "array"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2540,6 +2549,37 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "handlers.HealthStatus": {
+            "type": "object",
+            "properties": {
+                "services": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.ServiceStatus"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.ServiceStatus": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "latency": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "models.AuthResponse": {
             "description": "Authentication response structure",
             "type": "object",
@@ -2637,9 +2677,12 @@ const docTemplate = `{
                 },
                 "password": {
                     "description": "User password",
+                    "type": "string"
+                },
+                "pushToken": {
+                    "description": "Expo push token for notifications",
                     "type": "string",
-                    "maxLength": 72,
-                    "minLength": 6
+                    "example": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
                 }
             }
         },
@@ -2830,11 +2873,11 @@ const docTemplate = `{
                 "BVN",
                 "Email",
                 "FirstName",
+                "IdentityToken",
                 "LastName",
                 "Password",
                 "PhoneNumber",
-                "Username",
-                "pushToken"
+                "Username"
             ],
             "properties": {
                 "BVN": {
@@ -2854,6 +2897,12 @@ const docTemplate = `{
                     "maxLength": 50,
                     "minLength": 2,
                     "example": "John"
+                },
+                "IdentityToken": {
+                    "type": "string",
+                    "maxLength": 72,
+                    "minLength": 6,
+                    "example": "1234567890"
                 },
                 "LastName": {
                     "description": "User last name",
@@ -2980,6 +3029,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "12345678901"
                 },
+                "IdentityToken": {
+                    "type": "string",
+                    "example": "ABCD1234563FD"
+                },
                 "accountId": {
                     "description": "User account ID",
                     "type": "string",
@@ -3038,7 +3091,7 @@ const docTemplate = `{
                     "example": "+2348012345678"
                 },
                 "pushToken": {
-                    "description": "DeviceID            string    ` + "`" + `json:\"device_id\"` + "`" + `",
+                    "description": "Expo push token for notifications",
                     "type": "string",
                     "example": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"
                 },
@@ -3327,8 +3380,8 @@ var SwaggerInfo = &swag.Spec{
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{"http", "https"},
-	Title:            "NFC Payments Backend API",
-	Description:      "API for NFC-based payment processing system",
+	Title:            "RuralPay Backend API",
+	Description:      "API for NFC-based Payment Processing System",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

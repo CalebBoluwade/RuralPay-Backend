@@ -154,7 +154,7 @@ func (cps *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
 // @Param bin query string true "Card BIN (first 6-8 digits)"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
-// @Router /cards/bins [get]
+// @Router /card/bin [get]
 func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	bin := r.URL.Query().Get("bin")
 	if bin == "" {

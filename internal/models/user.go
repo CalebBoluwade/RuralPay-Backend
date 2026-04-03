@@ -27,7 +27,7 @@ type DeviceInfo struct {
 // @Description Login request structure
 type LoginRequest struct {
 	Identifier    string     `json:"identifier" validate:"required,max=254" example:"+2348012345678"`         // User phone number, email, or username
-	Password      string     `json:"password" validate:"required,min=6,max=72"`                               // User password
+	Password      string     `json:"password" validate:"required"`                                            // User password
 	DeviceInfo    DeviceInfo `json:"deviceInfo" validate:"required"`                                          // Device information for login
 	ExpoPushToken string     `json:"pushToken,omitempty" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 }
@@ -35,14 +35,15 @@ type LoginRequest struct {
 // RegisterRequest represents the registration request payload
 // @Description Registration request structure
 type RegisterRequest struct {
-	Email         string `json:"Email" validate:"required,email,max=254" example:"user@example.com"`                // User email address
-	Username      string `json:"Username" validate:"required,min=3,max=30,alphanum" example:"johndoe"`              // Username
-	Password      string `json:"Password" validate:"required,min=6,max=72"`                                         // User password
-	FirstName     string `json:"FirstName" validate:"required,min=2,max=50" example:"John"`                         // User first name
-	LastName      string `json:"LastName" validate:"required,min=2,max=50" example:"Doe"`                           // User last name
-	BVN           string `json:"BVN" validate:"required,len=11,numeric" example:"12345678901"`                      // Bank Verification Number
-	PhoneNumber   string `json:"PhoneNumber" validate:"required,min=10,max=15" example:"+2348012345678"`            // Phone number
-	ExpoPushToken string `json:"pushToken" validate:"required" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
+	Email         string `json:"Email" validate:"required,email,max=254" example:"user@example.com"`     // User email address
+	Username      string `json:"Username" validate:"required,min=3,max=30,alphanum" example:"johndoe"`   // Username
+	Password      string `json:"Password" validate:"required,min=6,max=72"`                              // User password
+	FirstName     string `json:"FirstName" validate:"required,min=2,max=50" example:"John"`              // User first name
+	LastName      string `json:"LastName" validate:"required,min=2,max=50" example:"Doe"`                // User last name
+	BVN           string `json:"BVN" validate:"required,len=11,numeric" example:"12345678901"`           // Bank Verification Number
+	PhoneNumber   string `json:"PhoneNumber" validate:"required,min=10,max=15" example:"+2348012345678"` // Phone number
+	IdentityToken string `json:"IdentityToken" validate:"required,alphanum,uppercase,min=6,max=72" example:"1234567890"`
+	ExpoPushToken string `json:"pushToken" validate:"" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 }
 
 // AuthResponse represents the authentication response
@@ -59,15 +60,15 @@ type AuthResponse struct {
 // User represents user information
 // @Description User structure
 type User struct {
-	ID          int    `json:"id" example:"1"`                       // User ID
-	Email       string `json:"email" example:"user@example.com"`     // User email
-	FirstName   string `json:"firstName" example:"John"`             // User first name
-	LastName    string `json:"lastName" example:"Doe"`               // User last name
-	AccountId   string `json:"accountId" example:"1234567890"`       // User account ID
-	Username    string `json:"userName" example:"johndoe"`           // User username
-	PhoneNumber string `json:"phoneNumber" example:"+2348012345678"` // User phone number
-	BVN         string `json:"BVN" example:"12345678901"`            // User BVN
-	// DeviceID            string    `json:"device_id"`
+	ID                  int       `json:"id" example:"1"`                       // User ID
+	Email               string    `json:"email" example:"user@example.com"`     // User email
+	FirstName           string    `json:"firstName" example:"John"`             // User first name
+	LastName            string    `json:"lastName" example:"Doe"`               // User last name
+	AccountId           string    `json:"accountId" example:"1234567890"`       // User account ID
+	Username            string    `json:"userName" example:"johndoe"`           // User username
+	PhoneNumber         string    `json:"phoneNumber" example:"+2348012345678"` // User phone number
+	BVN                 string    `json:"BVN" example:"12345678901"`            // User BVN
+	IdentityToken       string    `json:"IdentityToken" example:"ABCD1234563FD"`
 	ExpoPushToken       string    `json:"pushToken,omitempty" example:"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"` // Expo push token for notifications
 	Role                string    `json:"role" example:"user"`                                                     // User role (e.g., user, merchant)
 	Merchant            *Merchant `json:"merchant,omitempty"`                                                      // Merchant information (if user is a merchant)

@@ -74,7 +74,7 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mandateResp, err := s.nibssClient.GetAccountMandate(req.BankCode, req.AccountNumber)
+	mandateResp, err := s.nibssClient.GetAccountMandate(r.Context(), req.BankCode, req.AccountNumber)
 	if err != nil {
 		slog.Error("account.link.nibss_failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to Verify Account", http.StatusBadGateway, nil)
@@ -123,10 +123,24 @@ func (s *AccountService) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.db.ExecContext(r.Context(), `UPDATE accounts SET status = 0 WHERE user_id = $1 AND account_id = $2 RETURNING id`, userID, accountId)
+	rows, err := s.db.QueryContext(r.Context(), `UPDATE accounts SET status = 0 WHERE user_id = $1 AND account_id = $2 RETURNING id`, userID, accountId)
 	if err != nil {
 		slog.Error("account.link.insert_failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to Link Account", http.StatusFailedDependency, nil)
+		return
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		slog.Warn("unlink.account.not_found")
+		utils.SendErrorResponse(w, "Account Not Found", http.StatusNotFound, nil)
+		return
+	}
+
+	var id int64
+	if err := rows.Scan(&id); err != nil {
+		slog.Error("account.unlink.scan_failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Unlink Account", http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -208,7 +222,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Warn("account.name.enquiry.account_not_found_locally", "account_id", accountId)
+	slog.Info("account.name.enquiry.account_not_found_locally", "account_id", accountId, "bank_code", bankCode)
 
 	if bankCode == "" {
 		slog.Warn("account.name.enquiry.no_bank_code_for_switch_lookup", "account_id", accountId)
@@ -230,7 +244,9 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	idResp, err := s.nibssClient.VerifyAccountIdentification([]byte(xmlData))
+	slog.Debug("account.name.enquiry.xml", "xml", xmlData)
+
+	idResp, err := s.nibssClient.VerifyAccountIdentification(r.Context(), []byte(xmlData))
 	if err != nil {
 		slog.Error("account.name.enquiry.acmt023_nibss_failed", "error", err)
 		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
@@ -620,7 +636,7 @@ func (s *AccountService) GenerateBVNOTP(w http.ResponseWriter, r *http.Request) 
 
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
-	bvnData, err := s.nibssClient.VerifyBVN(req.BVN, req.PhoneNumber)
+	bvnData, err := s.nibssClient.VerifyBVN(r.Context(), req.BVN, req.PhoneNumber)
 	if err != nil {
 		slog.Error("account.generate_bvn_otp.nibss_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, "BVN verification failed", http.StatusBadGateway, nil)
@@ -851,7 +867,7 @@ func (s *AccountService) GenerateUSSDCode(w http.ResponseWriter, r *http.Request
 	slog.Info("account.generate_code.request", "type", req.Type, "amount", req.Amount)
 
 	// if err := s.validator.ValidateStruct(&req); err != nil {
-	// 	log.Printf("[USSD] GenerateCode - Validation error: %v", err)
+	// 	slog.Error("[USSD] GenerateCode - Validation error: %v", "error", err)
 	// 	utils.SendErrorResponse(w, string(utils.ValidationError), http.StatusBadRequest, err)
 	// 	return
 	// }
@@ -913,10 +929,10 @@ func (s *AccountService) ValidateUSSDCode(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// if err := h.validator.ValidateStruct(&req); err != nil {
-	// 	utils.SendErrorResponse(w, string(utils.ValidationError), http.StatusBadRequest, err)
-	// 	return
-	// }
+	//if err := s.validator.ValidateStruct(&req); err != nil {
+	//	utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
+	//	return
+	//}
 
 	codeType := models.PullPayment
 	if len(req.Code) > 0 && req.Code[0] >= '0' && req.Code[0] <= '9' {
@@ -965,74 +981,6 @@ func (s *AccountService) GetUserCodes(w http.ResponseWriter, r *http.Request) {
 	utils.SendSuccessResponse(w, "Success", codes, http.StatusOK)
 }
 
-// GetBeneficiaries retrieves saved beneficiaries for the authenticated user
-// @Summary Get beneficiaries
-// @Description Retrieve all saved beneficiaries for the authenticated user
-// @Tags Accounts
-// @Produce json
-// @Success 200 {object} object{beneficiaries=array}
-// @Failure 401 {object} map[string]string
-// @Failure 500 {object} map[string]string
-// @Security BearerAuth
-// @Router /account/beneficiaries [get]
-func (s *AccountService) GetBeneficiaries(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.GetBeneficiaries.start")
-	ctx := r.Context()
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, ctx)
-	cacheKey := fmt.Sprintf("beneficiaries:%d", userID)
-
-	if s.redis != nil {
-		if cached, err := s.redis.Get(ctx, cacheKey).Bytes(); err == nil {
-			slog.Info("account.GetBeneficiaries.cache_hit", "user_id", userID)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(cached)
-			return
-		}
-		slog.Info("account.GetBeneficiaries.cache_miss", "user_id", userID)
-	}
-
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, account_number, account_name, bank_name, bank_code
-		FROM beneficiaries
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`, userID)
-	if err != nil {
-		slog.Error("account.get_beneficiaries.query_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to fetch beneficiaries", http.StatusFailedDependency, nil)
-		return
-	}
-	defer rows.Close()
-
-	beneficiaries := []map[string]any{}
-	for rows.Next() {
-		var id int
-		var accountNumber, accountName, bankName, bankCode string
-		if err := rows.Scan(&id, &accountNumber, &accountName, &bankName, &bankCode); err != nil {
-			slog.Error("account.get_beneficiaries.scan_error", "user_id", userID, "error", err)
-			continue
-		}
-		beneficiaries = append(beneficiaries, map[string]any{
-			"id":            id,
-			"accountNumber": accountNumber,
-			"accountName":   accountName,
-			"bankName":      bankName,
-			"bankCode":      bankCode,
-			"bankLogo":      s.bankService.LoadLogo(bankCode),
-		})
-	}
-
-	slog.Info("account.get_beneficiaries.done", "user_id", userID, "count", len(beneficiaries))
-
-	payload, _ := json.Marshal(map[string]any{"beneficiaries": beneficiaries})
-	if s.redis != nil {
-		slog.Info("account.GetBeneficiaries.caching_result", "user_id", userID)
-		s.redis.Set(ctx, cacheKey, payload, 10*time.Minute)
-	}
-
-	utils.SendSuccessResponse(w, "Returning Beneficiaries", beneficiaries, http.StatusOK)
-}
-
 func (s *AccountService) fetchUserForNotification(id int) *models.User {
 	slog.Info("account.fetchUserForNotification.start", "user_id", id)
 	user := &models.User{ID: id}
@@ -1068,4 +1016,47 @@ func (s *AccountService) fetchUserForNotification(id int) *models.User {
 
 	slog.Info("account.fetchUserForNotification.success", "user_id", id)
 	return user
+}
+
+func (s *AccountService) ValidateFacialIdentity(w http.ResponseWriter, r *http.Request) {
+	slog.Info("account.face.identity.verification.start")
+
+	var req struct {
+		BVN              string `json:"BVN" validate:"required"`
+		UserSelfieBase64 string `json:"userSelfie" validate:"required"`
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&req); err != nil {
+		slog.Error("account.face.identity.verification.decode_error", "error", err)
+		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		return
+	}
+
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		slog.Warn("account.face.identity.verification.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
+		return
+	}
+
+	key := fmt.Sprintf("BVN_FACE:%s", req.BVN)
+	identityToken := utils.GenerateImageIdentityToken()
+
+	if s.redis != nil {
+		ctx := context.Background()
+		if err := s.redis.Set(ctx, key, identityToken, 5*time.Minute).Err(); err != nil {
+			slog.Error("account.face.generate_identityToken.store_failed", "error", err)
+			utils.SendErrorResponse(w, utils.OTPGenerationError, http.StatusFailedDependency, nil)
+			return
+		}
+	}
+
+	slog.Info("account.face.identity.verification.success", "req", req)
+
+	utils.SendSuccessResponse(w, "Validated Successfully", map[string]string{
+		"identityToken": identityToken,
+	}, http.StatusOK)
 }
