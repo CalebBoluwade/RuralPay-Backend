@@ -21,6 +21,22 @@ import (
 // 2. Mutual TLS: Client certificate verification via tls.ConnectionState
 func ISO20022CallbackAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only verify callbacks for ISO20022 endpoints as per NIBSS specs
+		// Skip verification for non-callback requests
+		callbackEndpoints := map[string]bool{
+			"/pacs008": true,
+			"/pacs002": true,
+			"/pacs028": true,
+			"/acmt023": true,
+			"/acmt024": true,
+		}
+
+		if !callbackEndpoints[r.URL.Path] {
+			// Not a callback endpoint, skip authentication
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Check if mutual TLS is enabled
 		if viper.GetBool("iso20022.callback.tls.enabled") {
 			if err := verifyMutualTLS(r); err != nil {

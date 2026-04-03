@@ -31,7 +31,7 @@ import (
 // @title RuralPay Backend API
 // @version 1.0
 // @description API for NFC-based Payment Processing System
-// @host localhost:8080
+// @host api.ruralpay.com
 // @BasePath /api/v1
 // @schemes http https
 
@@ -80,7 +80,7 @@ func main() {
 	docs.SwaggerInfo.Version = "1.0"
 
 	// Host is set dynamically based on environment; defaults to localhost for development
-	swaggerHost := viper.GetString("swagger.host")
+	swaggerHost := viper.GetString("app.base_url")
 	if swaggerHost == "" {
 		swaggerHost = "localhost:" + port
 	}

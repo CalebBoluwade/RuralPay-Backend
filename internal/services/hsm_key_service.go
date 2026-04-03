@@ -29,7 +29,7 @@ func NewHSMKeyService(db *sql.DB, hsm hsm.HSMInterface) *HSMKeyService {
 // SyncKeysToDatabase syncs HSM keys to the database
 func (s *HSMKeyService) SyncKeysToDatabase() error {
 	// Get all key IDs that should exist
-	keyIDs := []string{"card_signing", "transaction_signing"}
+	keyIDs := []string{"transaction_signing"}
 
 	for _, keyID := range keyIDs {
 		if err := s.syncKeyToDatabase(keyID); err != nil {

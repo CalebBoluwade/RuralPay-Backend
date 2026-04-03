@@ -771,11 +771,6 @@ func (hsm *SoftwareHSM) decryptWithMasterKey(data []byte) ([]byte, error) {
 }
 
 func (hsm *SoftwareHSM) generateDefaultKeys() error {
-	// Generate card signing key
-	if _, err := hsm.generateKeyPairInternal("card_signing"); err != nil {
-		return err
-	}
-
 	// Generate transaction signing key
 	if _, err := hsm.generateKeyPairInternal("transaction_signing"); err != nil {
 		return err
