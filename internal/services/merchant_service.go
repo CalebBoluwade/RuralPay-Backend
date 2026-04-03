@@ -172,14 +172,14 @@ func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request
 			WHERE m.id = $1
 		)
 		SELECT
-			status                                                                                        AS transaction_status,
-			COUNT(*)                                                                                      AS transactions_with_status,
-			COALESCE(SUM(amount), 0)                                                                      AS amount_for_status,
-			MAX(commission_rate)                                                                          AS merchant_commission_rate,
-			COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE AND status = 'COMPLETED')                   AS completed_count_today,
-			COALESCE(SUM(amount) FILTER (WHERE created_at >= CURRENT_DATE AND status = 'COMPLETED'), 0)   AS completed_volume_today,
-			COUNT(*) FILTER (WHERE status = 'COMPLETED')                                                  AS completed_count_all_time,
-			COALESCE(SUM(amount) FILTER (WHERE status = 'COMPLETED'), 0)                                  AS completed_volume_all_time
+			status,
+			COUNT(*)                                                                                     AS transaction_count,
+			COALESCE(SUM(amount), 0)                                                                     AS total_amount,
+			MAX(commission_rate)                                                                         AS commission_rate,
+			COUNT(*) FILTER (WHERE status = 'COMPLETED' AND created_at >= CURRENT_DATE)                  AS today_completed_count,
+			COALESCE(SUM(amount) FILTER (WHERE status = 'COMPLETED' AND created_at >= CURRENT_DATE), 0) AS today_completed_volume,
+			COUNT(*) FILTER (WHERE status = 'COMPLETED')                                                 AS total_completed_count,
+			COALESCE(SUM(amount) FILTER (WHERE status = 'COMPLETED'), 0)                                 AS total_completed_volume
 		FROM base
 		GROUP BY status`, merchantID)
 	if err == sql.ErrNoRows || rows == nil {
@@ -197,13 +197,18 @@ func (s *MerchantService) GetMerchantData(w http.ResponseWriter, r *http.Request
 	var commissionRate float64
 	for rows.Next() {
 		var ss TransactionStatusBreakdown
+		var todayCount, todayVolume, totalCount, totalVolume int64
 		rows.Scan(&ss.Status, &ss.TransactionCount, &ss.TotalAmount,
 			&commissionRate,
-			&stats.TodayCompletedCount, &stats.TodayCompletedVolume,
-			&stats.TotalCompletedCount, &stats.TotalCompletedVolume)
+			&todayCount, &todayVolume,
+			&totalCount, &totalVolume)
 		if ss.Status != "" {
 			stats.ByStatus = append(stats.ByStatus, ss)
 		}
+		stats.TodayCompletedCount += todayCount
+		stats.TodayCompletedVolume += todayVolume
+		stats.TotalCompletedCount += totalCount
+		stats.TotalCompletedVolume += totalVolume
 	}
 
 	stats.TodayProfit = float64(stats.TodayCompletedVolume) * (commissionRate / 100)

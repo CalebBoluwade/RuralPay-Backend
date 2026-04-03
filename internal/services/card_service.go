@@ -154,7 +154,7 @@ func (cps *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
 // @Param bin query string true "Card BIN (first 6-8 digits)"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
-// @Router /cards/bins [get]
+// @Router /card/bin [get]
 func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	bin := r.URL.Query().Get("bin")
 	if bin == "" {
@@ -190,16 +190,14 @@ func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if data, found := seedData[lookupBin]; found {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(data)
+		utils.SendSuccessResponse(w, "Fetched From Cache", data, http.StatusOK)
 		return
 	}
 
 	// 2. Fetch from external API
 	response, err := fetchFromBinList(bin)
 	if err == nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		utils.SendSuccessResponse(w, "Fetched From API", response, http.StatusOK)
 		return
 	}
 
@@ -220,8 +218,7 @@ func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(fallback)
+	utils.SendSuccessResponse(w, "Fetched From Fallback", fallback, http.StatusOK)
 }
 
 // fetchFromBinList retrieves BIN info from external API

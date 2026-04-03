@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rsa"
 	"encoding/json"
 	"encoding/xml"
@@ -147,7 +148,7 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	resp, err := iso.SendToSettlement(pacs008)
+	resp, err := iso.SendToSettlement(r.Context(), pacs008)
 	if err != nil {
 		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
 		return
@@ -164,7 +165,7 @@ func (iso *ISO20022Service) ConvertTransaction(tx *models.TransactionRecord) (*p
 	return iso.CreatePacs008(tx)
 }
 
-func (iso *ISO20022Service) SendToSettlement(pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (SettlementResult, error) {
+func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (SettlementResult, error) {
 	xmlData, err := iso.ConvertToXML(pacs008)
 	if err != nil {
 		return SettlementResult{}, fmt.Errorf("failed to convert pacs.008 to XML: %w", err)
@@ -182,7 +183,7 @@ func (iso *ISO20022Service) SendToSettlement(pacs008 *pacs_v08.FIToFICustomerCre
 		}
 	}
 
-	pacs002, err := iso.nibssClient.ProcessFundsTransferSettlement(payload)
+	pacs002, err := iso.nibssClient.ProcessFundsTransferSettlement(ctx, payload)
 	if err != nil {
 		return SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
 	}
@@ -355,7 +356,7 @@ func (iso *ISO20022Service) CreatePacs028(originalMsgID, originalTxID string) (*
 }
 
 // RequestPaymentStatus sends a pacs.028 to NIBSS and returns the pacs.002 status response
-func (iso *ISO20022Service) RequestPaymentStatus(originalMsgID, originalTxID string) (SettlementResult, error) {
+func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMsgID, originalTxID string) (SettlementResult, error) {
 	pacs028, err := iso.CreatePacs028(originalMsgID, originalTxID)
 	if err != nil {
 		return SettlementResult{}, fmt.Errorf("failed to build pacs.028: %w", err)
@@ -366,7 +367,7 @@ func (iso *ISO20022Service) RequestPaymentStatus(originalMsgID, originalTxID str
 		return SettlementResult{}, fmt.Errorf("failed to convert pacs.028 to XML: %w", err)
 	}
 
-	pacs002, err := iso.nibssClient.RequestPaymentStatus([]byte(xmlData))
+	pacs002, err := iso.nibssClient.RequestPaymentStatus(ctx, []byte(xmlData))
 	if err != nil {
 		return SettlementResult{}, fmt.Errorf("failed to request payment status: %w", err)
 	}

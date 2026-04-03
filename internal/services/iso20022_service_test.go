@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -229,13 +230,13 @@ func TestISO20022Service_RequestPaymentStatus(t *testing.T) {
 	service := NewISO20022Service()
 
 	t.Run("fails when NIBSS unreachable", func(t *testing.T) {
-		_, err := service.RequestPaymentStatus("msg-001", "tx123")
+		_, err := service.RequestPaymentStatus(context.Background(), "msg-001", "tx123")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to request payment status")
 	})
 
 	t.Run("fails with empty originalMsgID", func(t *testing.T) {
-		_, err := service.RequestPaymentStatus("", "tx123")
+		_, err := service.RequestPaymentStatus(context.Background(), "", "tx123")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to build pacs.028")
 	})
@@ -354,7 +355,7 @@ func TestISO20022Service_SendToSettlement(t *testing.T) {
 		doc, err := service.CreatePacs008(tx)
 		assert.NoError(t, err)
 
-		_, err = service.SendToSettlement(doc)
+		_, err = service.SendToSettlement(context.Background(), doc)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send pacs.008 to settlement")
 	})

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +38,7 @@ func NewVoiceBankingService() *VoiceBankingService {
 	ctx := context.Background()
 	client, err := speech.NewClient(ctx)
 	if err != nil {
-		log.Printf("Warning: Failed to initialize speech client: %v", err)
+		slog.Error("Warning: Failed to initialize speech client: %v", "error", err)
 		return &VoiceBankingService{client: nil}
 	}
 	return &VoiceBankingService{client: client}
@@ -88,12 +88,12 @@ func (s *VoiceBankingService) TranscribeAudio(w http.ResponseWriter, r *http.Req
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
-		log.Printf("[VOICE] Transcription failed for user %s: %v", userID, err)
+		slog.Error("[VOICE] Transcription failed for user %s: %v", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, "Failed to transcribe audio", http.StatusFailedDependency, nil)
 		return
 	}
 
-	log.Printf("[VOICE] Transcription successful for user %s, confidence: %.2f", userID, confidence)
+	slog.Info("[VOICE] Transcription successful for user %s, confidence: %.2f", "user_id", userID, "confidence", confidence)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(TranscribeResponse{
 		Transcript: transcript,

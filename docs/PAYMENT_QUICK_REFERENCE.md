@@ -2,7 +2,7 @@
 
 ## Endpoint
 ```
-POST /api/v1/payments
+POST /api/v1/payment
 ```
 
 ## Authentication
@@ -196,7 +196,7 @@ Duplicate `transactionId` values return cached result without reprocessing:
 
 ### Test Card Payment
 ```bash
-curl -X POST http://localhost:8080/api/v1/payments \
+curl -X POST http://localhost:8080/api/v1/payment \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
   -d '{"fromAccount":"CARD123","toAccount":"MERCHANT456","amount":10000,"currency":"NGN","paymentMode":"CARD","metadata":{"signature":"sig","counter":1}}'
@@ -204,7 +204,7 @@ curl -X POST http://localhost:8080/api/v1/payments \
 
 ### Test Bank Transfer
 ```bash
-curl -X POST http://localhost:8080/api/v1/payments \
+curl -X POST http://localhost:8080/api/v1/payment \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
   -d '{"fromAccount":"1234567890","toAccount":"0987654321","amount":50000,"currency":"NGN","paymentMode":"BANK_TRANSFER","metadata":{"toBankCode":"058"}}'

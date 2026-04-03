@@ -184,24 +184,10 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	locationJSON, _ := json.Marshal(req.Location)
 
 	_, err = tx.ExecContext(ctx, `
-		WITH user_info AS (
-			SELECT a.user_id 
-			FROM accounts a 
-			WHERE a.account_id = $2
-			LIMIT 1
-		),
-		limit_update AS (
-			UPDATE user_limits ul
-			SET updated_at = NOW()
-			FROM user_info ui
-			WHERE ul.user_id = ui.user_id
-			RETURNING ul.user_id
-		)
 		INSERT INTO transactions 
 		(transaction_id, debit_id, credit_id, amount, fee, total_amount, currency, narration, type, payment_mode, status, location, metadata, user_id, created_at, signature)
-		SELECT $3, $2, $4, $5, $6, $1, $7, $8, $9, 'BANK_TRANSFER', 'PENDING', $10, $11, ui.user_id, NOW(), $12
-		FROM user_info ui
-	`, totalAmount, req.FromAccount, req.TransactionID, req.BeneficiaryAccountNumber, req.Amount, fee, req.Currency, req.Narration, req.TxType, locationJSON, metadata, signature)
+		VALUES ($3, $2, $4, $5, $6, $1, $7, $8, $9, 'BANK_TRANSFER', 'PENDING', $10, $11, $13, NOW(), $12)
+	`, totalAmount, req.FromAccount, req.TransactionID, req.BeneficiaryAccountNumber, req.Amount, fee, req.Currency, req.Narration, req.TxType, locationJSON, metadata, signature, req.UserID)
 
 	if err != nil {
 		slog.Error("bank_transfer.process.insert_failed", "tx_id", req.TransactionID, "error", err)
@@ -214,15 +200,16 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	}
 
 	slog.Info("bank_transfer.process.success", "tx_id", req.TransactionID)
-	// settlementErr, shouldReverse := p.sendToSettlement(req)
+
+	// settlementErr, shouldReverse := p.sendToSettlement(ctx, req)
 	// if settlementErr != nil {
 	// 	if shouldReverse {
-	// 		log.Printf("[BankTransferProvider] Settlement Failed. Reversing transaction --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
+	// 		slog.Info("[BankTransferProvider] Settlement Failed. Reversing transaction --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
 	// 		if revErr := p.ledgerService.Reverse(req.TransactionID); revErr != nil {
-	// 			log.Printf("[BankTransferProvider] Reversal Failed --> [Transaction ID]=%s %v", req.TransactionID, revErr)
+	// 			slog.Error("[BankTransferProvider] Reversal Failed --> [Transaction ID]=%s %v", req.TransactionID, revErr)
 	// 		}
 	// 	} else {
-	// 		log.Printf("[BankTransferProvider] Settlement Failed (retryable). Transaction remains pending --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
+	// 		slog.Error("[BankTransferProvider] Settlement Failed (retryable). Transaction remains pending --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
 	// 	}
 	// 	return &models.PaymentResponse{
 	// 		Success:       false,
@@ -250,7 +237,7 @@ func (p *BankTransferPaymentProvider) calculateFee(amount int64) int64 {
 	return fee + p.feeFixed
 }
 
-func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentRequest) (error, bool) {
+func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req *models.PaymentRequest) (error, bool) {
 	slog.Info("bank_transfer.settlement.start", "tx_id", req.TransactionID)
 	modelTx := &models.TransactionRecord{
 		TransactionID: req.TransactionID,
@@ -269,23 +256,23 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
 	if err != nil {
 		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
-		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_ISO_CONVERSION", req.TransactionID); dbErr != nil {
+		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_ISO_CONVERSION", req.TransactionID); dbErr != nil {
 			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 		}
 		return err, true
 	}
 
 	slog.Info("bank_transfer.settlement.sending", "tx_id", req.TransactionID)
-	resp, err := p.iso20022Service.SendToSettlement(doc)
+	resp, err := p.iso20022Service.SendToSettlement(ctx, doc)
 	if err != nil {
 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
 		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
 		if shouldReverse {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
+			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 			}
 		} else {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1 WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
+			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 			}
 		}
@@ -294,7 +281,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(req *models.PaymentReques
 
 	slog.Info("bank_transfer.settlement.success", "tx_id", req.TransactionID, "status", resp.Status)
 	respJSON, _ := json.Marshal(resp)
-	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2 WHERE transaction_id = $3`, "SETTLED", respJSON, req.TransactionID); dbErr != nil {
+	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, "SETTLED", respJSON, req.TransactionID); dbErr != nil {
 		slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 	}
 	return nil, false

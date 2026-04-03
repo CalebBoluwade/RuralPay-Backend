@@ -32,7 +32,7 @@ func (vh *ValidationHelper) SendErrorResponse(w http.ResponseWriter, message str
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	errorResp := utils.ErrorResponse{Error: message, Success: false}
+	errorResp := utils.APIErrorResponse{Error: message, Success: false}
 	if validationErr != nil {
 		errorResp.Details = make(map[string]string)
 		for _, err := range validationErr.(validator.ValidationErrors) {

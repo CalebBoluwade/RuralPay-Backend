@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
 )
@@ -51,6 +52,7 @@ func parsePagination(r *http.Request) (page, limit int) {
 
 type TransactionQueryService struct {
 	db        *sql.DB
+	hsm       hsm.HSMInterface
 	validator *ValidationHelper
 }
 
@@ -71,11 +73,23 @@ type TransactionHistory struct {
 	SettlementDate *time.Time         `json:"settlementDate,omitempty"`
 }
 
-func NewTransactionQueryService(db *sql.DB) *TransactionQueryService {
+func NewTransactionQueryService(db *sql.DB, hsmInstance hsm.HSMInterface) *TransactionQueryService {
 	return &TransactionQueryService{
 		db:        db,
+		hsm:       hsmInstance,
 		validator: NewValidationHelper(),
 	}
+}
+
+func (s *TransactionQueryService) decryptDebitID(encrypted string, paymentMode models.PaymentMode) string {
+	if paymentMode != models.PaymentModeCard {
+		return encrypted
+	}
+	plain, err := s.hsm.DecryptPAN(encrypted)
+	if err != nil {
+		return utils.MaskPAN(encrypted)
+	}
+	return plain
 }
 
 func (s *TransactionQueryService) fetchTransaction(txID string, userID int) (*TransactionHistory, error) {
@@ -97,6 +111,7 @@ func (s *TransactionQueryService) fetchTransaction(txID string, userID int) (*Tr
 	tx.Amount = int64(amount)
 	fee, _ := strconv.ParseFloat(feeStr, 64)
 	tx.Fee = int64(fee)
+	tx.FromAccount = s.decryptDebitID(tx.FromAccount, tx.PaymentMode)
 	return tx, nil
 }
 
@@ -133,6 +148,7 @@ func (s *TransactionQueryService) fetchMerchantTransaction(txID string, merchant
 	if settlementDate.Valid {
 		tx.SettlementDate = &settlementDate.Time
 	}
+	tx.FromAccount = s.decryptDebitID(tx.FromAccount, tx.PaymentMode)
 	return tx, nil
 }
 
@@ -275,6 +291,7 @@ func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, f txFi
 		tx.Amount = int64(amount)
 		fee, _ := strconv.ParseFloat(feeStr, 64)
 		tx.Fee = int64(fee)
+		tx.FromAccount = s.decryptDebitID(tx.FromAccount, tx.PaymentMode)
 		transactions = append(transactions, tx)
 	}
 
@@ -340,6 +357,7 @@ func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int
 		if settlementDate.Valid {
 			tx.SettlementDate = &settlementDate.Time
 		}
+		tx.FromAccount = s.decryptDebitID(tx.FromAccount, tx.PaymentMode)
 		transactions = append(transactions, tx)
 	}
 	if err := rows.Err(); err != nil {

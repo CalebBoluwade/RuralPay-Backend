@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -53,14 +54,19 @@ func checkTokenBlacklist(token string) bool {
 
 func parseSessionClaims(token string) (sid, deviceID string, err error) {
 	claims := jwt.MapClaims{}
-	jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
+	_, err = jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
 		return []byte(viper.GetString("jwt.secret_key")), nil
 	})
+
+	if err != nil {
+		return "", "", fmt.Errorf("failed to Parse JWToken: %w", err)
+	}
+
 	var hasSid, hasDeviceID bool
 	sid, hasSid = claims["sid"].(string)
 	deviceID, hasDeviceID = claims["did"].(string)
 	if !hasSid || !hasDeviceID {
-		return "", "", fmt.Errorf("missing session claims")
+		return "", "", fmt.Errorf("missing Session Claims")
 	}
 	return sid, deviceID, nil
 }
@@ -72,21 +78,21 @@ func validateSession(ctx context.Context, sessionKey, deviceID string) error {
 	sessionData, err := redisClient.Get(ctx, sessionKey).Result()
 	if err != nil {
 		slog.Warn("auth.session.not_found", "session_key", sessionKey, "error", err)
-		return fmt.Errorf("session not found")
+		return utils.ErrSessionNotFound
 	}
 	var data map[string]string
 	if err := json.Unmarshal([]byte(sessionData), &data); err != nil {
 		slog.Error("auth.session.unmarshal_failed", "error", err)
-		return fmt.Errorf("invalid session data")
+		return utils.ErrInvalidSession
 	}
 	expiresAt, _ := strconv.ParseInt(data["expires_at"], 10, 64)
 	if time.Now().Unix() > expiresAt {
 		redisClient.Del(ctx, sessionKey)
-		return fmt.Errorf("session expired")
+		return utils.ErrInvalidSession
 	}
 	if data["device_id"] != deviceID {
 		redisClient.Del(ctx, sessionKey)
-		return fmt.Errorf("device mismatch")
+		return utils.ErrDeviceMismatch
 	}
 	redisClient.Expire(ctx, sessionKey, cfg.InactivityTTL)
 	return nil
@@ -119,12 +125,12 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 
 		ctx := r.Context()
 		if err := validateSession(ctx, utils.SessionKeyPrefix+sid, deviceID); err != nil {
-			switch err.Error() {
-			case "session not found", "invalid session data":
-				validator.SendErrorResponse(w, strings.Title(err.Error()), http.StatusForbidden, nil)
-			default:
-				validator.SendErrorResponse(w, strings.Title(err.Error()), http.StatusUnauthorized, nil)
+			if errors.Is(err, utils.ErrSessionNotFound) || errors.Is(err, utils.ErrInvalidSession) {
+				validator.SendErrorResponse(w, "Session Locked - User Presence Required", http.StatusLocked, nil)
+				return
 			}
+
+			validator.SendErrorResponse(w, "Invalid Security Token", http.StatusUnauthorized, nil)
 			return
 		}
 
@@ -179,7 +185,7 @@ func validateToken(tokenString string) (string, any, error) {
 	claims := jwt.MapClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected Signing Method --> %v", token.Header["alg"])
+			return nil, fmt.Errorf("unexpected Signing Method --> %v", token.Header["alg"])
 		}
 		return []byte(viper.GetString("jwt.secret_key")), nil
 	})

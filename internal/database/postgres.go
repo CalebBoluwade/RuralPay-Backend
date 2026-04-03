@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -52,9 +51,9 @@ func GetConfig() *DBConfig {
 }
 
 const (
-	maxRetries    = 5
-	initialDelay  = 2 * time.Second
-	maxDelay      = 30 * time.Second
+	maxRetries   = 5
+	initialDelay = 2 * time.Second
+	maxDelay     = 30 * time.Second
 )
 
 func connectWithRetry(database *sql.DB) error {
@@ -85,12 +84,12 @@ func InitDB() (*sql.DB, error) {
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
 		slog.Error("Failed to open database", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err = connectWithRetry(db); err != nil {
 		slog.Error("Failed to connect to database", "error", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// Configure connection pool
@@ -114,13 +113,4 @@ func CloseDB() error {
 		return db.Close()
 	}
 	return nil
-}
-
-// InitDatabase initializes database with error handling
-func InitDatabase() *sql.DB {
-	db, err := InitDB()
-	if err != nil {
-		slog.Error("Failed to initialize database: %v", "error", err)
-	}
-	return db
 }

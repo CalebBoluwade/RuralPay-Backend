@@ -68,10 +68,36 @@ func init() {
 	_ = viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
 	_ = viper.BindEnv("nibss.bvn_url", "NIBSS_BVN_URL")
 
+	// ISO 20022 signing keys
 	_ = viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")
 	_ = viper.BindEnv("iso20022.nibss_pub_key_path", "ISO20022_NIBSS_PUB_KEY_PATH")
 
-	_ = viper.BindEnv("PII_ENCRYPTION_KEY", "PII_ENCRYPTION_KEY")
+	// ISO 20022 callback authentication
+	_ = viper.BindEnv("iso20022.callback.hmac_secret", "ISO20022_CALLBACK_HMAC_SECRET")
+	_ = viper.BindEnv("iso20022.callback.tls.enabled", "ISO20022_CALLBACK_TLS_ENABLED")
+	viper.SetDefault("iso20022.callback.tls.enabled", false)
+	_ = viper.BindEnv("iso20022.callback.tls.allowed_issuers", "ISO20022_CALLBACK_TLS_ALLOWED_ISSUERS")
+	_ = viper.BindEnv("iso20022.callback.tls.whitelisted_serials", "ISO20022_CALLBACK_TLS_WHITELISTED_SERIALS")
+	_ = viper.BindEnv("iso20022.callback.require_auth", "ISO20022_CALLBACK_REQUIRE_AUTH")
+	viper.SetDefault("iso20022.callback.require_auth", true)
+
+	// NIBSS ISO 20022 per-message-family endpoints
+	_ = viper.BindEnv("nibss.pacs.endpoint.url", "NIBSS_PACS_ENDPOINT_URL")
+	_ = viper.BindEnv("nibss.acmt.endpoint.url", "NIBSS_ACMT_ENDPOINT_URL")
+	_ = viper.BindEnv("nibss.pain.endpoint.url", "NIBSS_PAIN_ENDPOINT_URL")
+
+	// ISO 8583 (card payment settlement)
+	_ = viper.BindEnv("iso8583.base_url", "ISO8583_BASE_URL")
+	_ = viper.BindEnv("iso8583.signing_key_path", "ISO8583_SIGNING_KEY_PATH")
+	_ = viper.BindEnv("iso8583.nibss_pub_key_path", "ISO8583_NIBSS_PUB_KEY_PATH")
+	_ = viper.BindEnv("iso8583.acquiring_institution_id", "ISO8583_ACQUIRING_INSTITUTION_ID")
+	_ = viper.BindEnv("iso8583.forwarding_institution_id", "ISO8583_FORWARDING_INSTITUTION_ID")
+	_ = viper.BindEnv("iso8583.terminal_id", "ISO8583_TERMINAL_ID")
+	_ = viper.BindEnv("iso8583.card_acceptor_id", "ISO8583_CARD_ACCEPTOR_ID")
+	_ = viper.BindEnv("iso8583.card_acceptor_name", "ISO8583_CARD_ACCEPTOR_NAME")
+	_ = viper.BindEnv("iso8583.merchant_category_code", "ISO8583_MERCHANT_CATEGORY_CODE")
+	viper.SetDefault("iso8583.merchant_category_code", "5011")
+
 	_ = viper.BindEnv("log.file", "LOG_FILE")
 	viper.SetDefault("log.file", "./logs/app.log")
 	_ = viper.BindEnv("log.max_size_mb", "LOG_MAX_SIZE_MB")
@@ -87,6 +113,9 @@ func init() {
 	viper.SetDefault("app.version", "v1.0.0")
 	_ = viper.BindEnv("app.base_url", "APP_BASE_URL")
 	viper.SetDefault("app.base_url", "http://localhost:8080")
+
+	_ = viper.BindEnv("app.name", "APP_NAME")
+	viper.SetDefault("app.name", "RuralPay")
 
 	_ = viper.BindEnv("session.inactivity_ttl_minutes", "SESSION_INACTIVITY_TTL_MINUTES")
 	_ = viper.BindEnv("session.absolute_ttl_minutes", "SESSION_ABSOLUTE_TTL_MINUTES")

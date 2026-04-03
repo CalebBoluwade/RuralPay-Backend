@@ -14,12 +14,12 @@ import (
 
 type BINResponse struct {
 	BIN        string `json:"bin"`
-	Scheme     string `json:"scheme"`      // Visa, Mastercard, Verve
-	IssuerBank string `json:"issuer_bank"` // GTBank, Zenith, etc.
-	Type       string `json:"type"`        // Debit, Credit
-	Country    string `json:"country"`     // NG, US
-	Currency   string `json:"currency"`    // NGN, USD
-	Source     string `json:"source"`      // "internal" or "external"
+	Scheme     string `json:"scheme"`     // Visa, Mastercard, Verve
+	IssuerBank string `json:"issuerBank"` // GTBank, Zenith, etc.
+	Type       string `json:"type"`       // Debit, Credit
+	Country    string `json:"country"`    // NG, US
+	Currency   string `json:"currency"`   // NGN, USD
+	Source     string `json:"source"`     // "internal" or "external"
 }
 
 type CardInfo struct {
@@ -31,13 +31,14 @@ type CardInfo struct {
 	ATC           int    `json:"ATC"`
 	CVR           string `json:"CVR"`
 	IssuerAppData string `json:"issuerAppData"`
-	CountryCode   string `json:"countryCode"`
+	// CountryCode   string `json:"countryCode"`
+	CurrencyCode string `json:"currencyCode"`
 }
 
 type CardPaymentRequest struct {
 	TransactionID   string      `json:"transactionId"`
 	TransactionDate int64       `json:"transactionDate"`
-	MerchantID      string      `json:"merchantId" validate:"required,gt=0"`
+	MerchantID      int         `json:"merchantId" validate:"required,gt=0"`
 	Amount          int64       `json:"amount" validate:"required,gt=0"`
 	PaymentMode     PaymentMode `json:"paymentMode"`
 	CardInfo        CardInfo    `json:"cardInfo"`
@@ -55,6 +56,7 @@ type ISO8583Service interface {
 	ProcessMessage(ctx context.Context, rawMsg []byte) ([]byte, error)
 	BuildAuthorizationResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
 	BuildFinancialResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
+	SignAndSealPayload(payload []byte) ([]byte, error)
 }
 
 type AuthorizationRequest struct {

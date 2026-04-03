@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,9 +28,9 @@ import (
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
-// @title NFC Payments Backend API
+// @title RuralPay Backend API
 // @version 1.0
-// @description API for NFC-based payment processing system
+// @description API for NFC-based Payment Processing System
 // @host localhost:8080
 // @BasePath /api/v1
 // @schemes http https
@@ -45,12 +44,17 @@ func main() {
 
 	// Initialize PII-masking structured logger
 	logPath := viper.GetString("log.file")
-	structuredLogger, logCloser, err := appLogger.New(logPath, &slog.HandlerOptions{Level: slog.LevelInfo}, appLogger.RotationConfig{
+	dev := viper.GetString("app.env") == "development"
+	logLevel := slog.LevelInfo
+	if dev {
+		logLevel = slog.LevelDebug
+	}
+	structuredLogger, logCloser, err := appLogger.New(logPath, &slog.HandlerOptions{Level: logLevel}, appLogger.RotationConfig{
 		MaxSizeMB:  viper.GetInt("log.max_size_mb"),
 		MaxBackups: viper.GetInt("log.max_backups"),
 		MaxAgeDays: viper.GetInt("log.max_age_days"),
 		Compress:   true,
-	})
+	}, dev)
 	if err != nil {
 		slog.Error("Failed to Initialize logger", "error", err)
 		os.Exit(1)
@@ -64,16 +68,33 @@ func main() {
 	)
 	slog.SetDefault(structuredLogger)
 
+	// Determine port early (needed for Swagger config)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
 	// Initialize Swagger docs
 	docs.SwaggerInfo.Title = "RuralPay Backend API"
 	docs.SwaggerInfo.Description = "RuralPay Payment Processing API"
 	docs.SwaggerInfo.Version = "1.0"
-	docs.SwaggerInfo.Host = "localhost:8080"
+
+	// Host is set dynamically based on environment; defaults to localhost for development
+	swaggerHost := viper.GetString("swagger.host")
+	if swaggerHost == "" {
+		swaggerHost = "localhost:" + port
+	}
+
+	docs.SwaggerInfo.Host = swaggerHost
 	docs.SwaggerInfo.BasePath = "/api/v1"
 	docs.SwaggerInfo.Schemes = []string{"http", "https"}
 
 	// Initialize services
-	db := database.InitDatabase()
+	db, err := database.InitDB()
+	if err != nil {
+		slog.Error("server.database.init_failed", "error", err)
+		os.Exit(1)
+	}
 	defer db.Close()
 
 	redisClient := database.InitRedis()
@@ -87,7 +108,7 @@ func main() {
 		slog.Error("server.hsm.config_missing", "error", "HSM_MASTER_KEY environment variable is required")
 		os.Exit(1)
 	}
-	slog.Info("server.hsm.config_debug", "master_key_length", len(masterKey), "has_value", masterKey != "")
+	slog.Debug("server.hsm.config_debug", "master_key_length", len(masterKey), "has_value", masterKey != "")
 
 	hsm, err := hsm.InitHSM(hsm.Config{
 		HSMType:         viper.GetString("hsm.type"),
@@ -117,19 +138,21 @@ func main() {
 	}()
 
 	// Initialize services
-	notificationService := services.NewNotificationService()
-	userService := services.NewUserService(db, redisClient, notificationService)
+	notificationService := services.NewNotificationService(db)
+	userService := services.NewUserService(db, redisClient, hsm, notificationService)
 	bankService := services.NewBankService()
 	accountService := services.NewAccountService(db, redisClient)
 	cardService := services.NewCardService(db, hsm)
 	iso20022Service := services.NewISO20022Service()
 	merchantService := services.NewMerchantService(db)
-	transactionQueryService := services.NewTransactionQueryService(db)
+	transactionQueryService := services.NewTransactionQueryService(db, hsm)
+	voucherService := services.NewVoucherService(db)
 
 	// Initialize unified payment handler
-	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm)
+	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm, bankService)
 	feedbackHandler := handlers.NewFeedbackHandler(db, notificationService)
 	isoCallbackHandler := handlers.NewISO20022CallbackHandler(iso20022Service)
+	healthHandler := handlers.NewHealthHandler(db, redisClient)
 
 	// Initialize auth middleware with Redis
 	mW.InitAuthMiddleware(redisClient, userService, models.SessionConfig{
@@ -161,14 +184,12 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Health check
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
-	})
+	// Health Check Endpoint
+	r.Get("/health", healthHandler.HealthCheck)
 
-	// Swagger documentation
+	// Swagger Documentation — uses relative URL to work across environments
 	r.Get("/swagger/*", httpSwagger.Handler(
-		httpSwagger.URL("http://localhost:8080/swagger/doc.json"),
+		httpSwagger.URL("/swagger/doc.json"),
 	))
 
 	// Serve OpenAPI spec (hardcoded path — not derived from request input)
@@ -181,16 +202,33 @@ func main() {
 		http.ServeFile(w, r, openAPIPath)
 	})
 
-	// Static file server for bank logos
-	r.Handle("/static/bank-logos/*", http.StripPrefix("/static/bank-logos/",
-		mW.StaticFileServer("./static/bank-logos")))
+	// Static file server — covers bank logos, QR landing CSS/JS, and any future assets
+	r.Handle("/static/*", http.StripPrefix("/static/",
+		mW.StaticFileServer("./static")))
 
-	// ISO20022 callback endpoints — top-level, no auth, inbound pushes from NIBSS
-	r.Post("/pacs008", isoCallbackHandler.ReceivePacs008)
-	r.Post("/pacs002", isoCallbackHandler.ReceivePacs002)
-	r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
-	r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
-	r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
+	// QR dynamic landing page — shown when RuralPay app is not installed
+	r.Get("/pay/qr", handlers.QRLandingHandler)
+
+	// ISO20022 callback endpoints with authentication middleware
+	// These endpoints verify HMAC signatures or mutual TLS certificates
+	if viper.GetBool("iso20022.callback.require_auth") {
+		r.Route("/", func(r chi.Router) {
+			r.Use(mW.ISO20022CallbackAuth)
+			r.Post("/pacs008", isoCallbackHandler.ReceivePacs008)
+			r.Post("/pacs002", isoCallbackHandler.ReceivePacs002)
+			r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
+			r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
+			r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
+		})
+	} else {
+		// Authentication disabled (development/testing only)
+		slog.Warn("server.iso20022.auth_disabled")
+		r.Post("/pacs008", isoCallbackHandler.ReceivePacs008)
+		r.Post("/pacs002", isoCallbackHandler.ReceivePacs002)
+		r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
+		r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
+		r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
+	}
 
 	// API routes
 	r.Route("/api/v1", func(r chi.Router) {
@@ -206,16 +244,18 @@ func main() {
 			r.Post("/auth/login", userService.UserLogin)
 			r.Post("/auth/forgot-password", userService.ForgotPassword)
 			r.Post("/auth/reset-password", userService.ResetPassword)
+
+			r.Get("/encryption/keys", hsmKeyService.GetUserPublicKeys)
 		})
 
 		// General rate limit: 10 req / 10 min — register, refresh, OTP
 		r.Group(func(r chi.Router) {
 			r.Use(mW.RateLimiter(redisClient, mW.AuthGeneral))
 			r.Post("/auth", userService.RegisterNewUser)
-			r.Put("/auth", userService.EditUserProfile)
-			r.Post("/auth/refresh", userService.RefreshToken)
+
 			r.Post("/account/send-bvn-otp", accountService.GenerateBVNOTP)
 			r.Post("/account/validate-bvn-otp", accountService.ValidateBVNOTP)
+			r.Post("/account/validate-identity", accountService.ValidateFacialIdentity)
 		})
 
 		r.Get("/banks", bankService.GetAllBanks)
@@ -230,20 +270,21 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(mW.AuthSessionMiddleware)
 
+			r.Put("/auth", userService.EditUserProfile)
 			r.Delete("/auth", userService.DeleteUserProfile)
+			r.Post("/auth/refresh", userService.RefreshToken)
 			r.Get("/auth/account", userService.GetUserAccount)
 			r.Post("/auth/logout", userService.LogoutUser)
-			r.Post("/account/send-otp", accountService.GenerateUserOTP)
 
 			// Account endpoints
+			r.Post("/account/send-otp", accountService.GenerateUserOTP)
 			r.Post("/account/link", accountService.LinkAccount)
 			r.Post("/account/unlink/{accountNumber}", accountService.UnlinkAccount)
 			r.Get("/account/name-enquiry", accountService.AccountNameEnquiry)
 			r.Get("/account/balance-enquiry", accountService.AccountBalanceEnquiry)
 			r.Put("/account/limits", accountService.UpdateUserLimits)
 			r.Get("/account/virtual-account", accountService.GetVirtualAccount)
-			r.Get("/account/beneficiaries", accountService.GetBeneficiaries)
-			r.Get("/account/notifications", accountService.GetUserNotifications)
+			r.Get("/account/notifications", notificationService.GetUserNotifications)
 
 			// QR endpoints
 			r.Post("/account/qr", accountService.GenerateQR)
@@ -252,19 +293,25 @@ func main() {
 			r.Post("/account/ussd", accountService.GenerateUSSDCode)
 			r.Get("/account/ussd", accountService.ValidateUSSDCode)
 
+			r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
+
 			// Unified payment endpoint
-			r.Post("/payments", paymentHandler.HandlePayment)
+			r.Post("/payment", paymentHandler.HandlePayment)
+			r.Get("/payment/beneficiaries", paymentHandler.GetBeneficiaries)
 
 			// Transaction Query endpoints
 			r.Get("/transaction", transactionQueryService.GetRecentTransactions)
 			r.Get("/transaction/{txId}", transactionQueryService.GetTransaction)
 
 			// Card Endpoints
-			r.Get("/card/bins", cardService.QueryCardBin)
+			r.Get("/card/bin", cardService.QueryCardBin)
 			r.Post("/card/provision", cardService.ProvisionCard)
 			r.Post("/card/activate", cardService.ActivateCard)
 			r.Get("/card/{cardId}", cardService.GetCard)
 			r.Put("/card/{cardId}/suspend", cardService.SuspendCard)
+
+			// Voucher endpoints
+			r.Get("/vouchers", voucherService.FetchVouchers)
 
 			// ISO 20022 endpoints
 			r.Post("/iso20022/convert", iso20022Service.ConvertToISO20022)
@@ -286,11 +333,6 @@ func main() {
 			r.Put("/merchant/status", merchantService.UpdateMerchantStatus)
 		})
 	})
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
 
 	// Start server
 	server := &http.Server{

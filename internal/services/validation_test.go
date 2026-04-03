@@ -73,7 +73,7 @@ func TestSendErrorResponse(t *testing.T) {
 		assert.Equal(t, http.StatusFailedDependency, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-		var response utils.ErrorResponse
+		var response utils.APIErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, "Something went wrong", response.Error)
@@ -97,7 +97,7 @@ func TestSendErrorResponse(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
-		var response utils.ErrorResponse
+		var response utils.APIErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, string(utils.ValidationError), response.Error)
@@ -114,7 +114,7 @@ func TestSendErrorResponse(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
-		var response utils.ErrorResponse
+		var response utils.APIErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, utils.InvalidRequestError, response.Error)
@@ -127,7 +127,7 @@ func TestSendErrorResponse(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 
-		var response utils.ErrorResponse
+		var response utils.APIErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
 		assert.Equal(t, "Unauthorized access", response.Error)
@@ -142,7 +142,7 @@ func TestNewValidationHelper(t *testing.T) {
 
 func TestErrorResponse_Structure(t *testing.T) {
 	t.Run("error response structure", func(t *testing.T) {
-		errorResp := utils.ErrorResponse{
+		errorResp := utils.APIErrorResponse{
 			Error: "Test error",
 			Details: map[string]string{
 				"field1": "validation error 1",
@@ -153,7 +153,7 @@ func TestErrorResponse_Structure(t *testing.T) {
 		jsonData, err := json.Marshal(errorResp)
 		assert.NoError(t, err)
 
-		var unmarshaled utils.ErrorResponse
+		var unmarshaled utils.APIErrorResponse
 		err = json.Unmarshal(jsonData, &unmarshaled)
 		assert.NoError(t, err)
 		assert.Equal(t, "Test error", unmarshaled.Error)
@@ -162,14 +162,14 @@ func TestErrorResponse_Structure(t *testing.T) {
 	})
 
 	t.Run("error response without details", func(t *testing.T) {
-		errorResp := utils.ErrorResponse{
+		errorResp := utils.APIErrorResponse{
 			Error: "Simple error",
 		}
 
 		jsonData, err := json.Marshal(errorResp)
 		assert.NoError(t, err)
 
-		var unmarshaled utils.ErrorResponse
+		var unmarshaled utils.APIErrorResponse
 		err = json.Unmarshal(jsonData, &unmarshaled)
 		assert.NoError(t, err)
 		assert.Equal(t, "Simple error", unmarshaled.Error)

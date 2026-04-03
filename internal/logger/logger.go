@@ -49,7 +49,7 @@ func (h *piiMaskingHandler) Handle(ctx context.Context, r slog.Record) error {
 	masked := slog.NewRecord(r.Time, r.Level, maskPII(r.Message), r.PC)
 	r.Attrs(func(a slog.Attr) bool {
 		masked.AddAttrs(maskAttr(a))
-		return true
+		return false
 	})
 	return h.inner.Handle(ctx, masked)
 }
@@ -90,8 +90,8 @@ type RotationConfig struct {
 }
 
 // New creates a JSON slog.Logger writing to stdout and a rotating log file,
-// with PII masking applied to all log records.
-func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig) (*slog.Logger, io.Closer, error) {
+// with PII masking applied to all log records (skipped when dev is true).
+func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig, dev bool) (*slog.Logger, io.Closer, error) {
 	if err := os.MkdirAll(filepath.Dir(logFile), 0750); err != nil {
 		return nil, nil, err
 	}
@@ -117,7 +117,11 @@ func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig) (*slog.L
 	}
 
 	w := io.MultiWriter(os.Stdout, rotator)
-	handler := &piiMaskingHandler{inner: slog.NewJSONHandler(w, opts)}
+	base := slog.NewJSONHandler(w, opts)
+	var handler slog.Handler = base
+	if !dev {
+		handler = &piiMaskingHandler{inner: base}
+	}
 	return slog.New(handler), rotator, nil
 }
 

@@ -10,12 +10,13 @@ import (
 	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,29 +25,26 @@ import (
 	"time"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 // HSMInterface defines the HSM operations
 type HSMInterface interface {
-	// Key Management
-	GenerateKeyPair(keyID string) (*KeyPair, error)
-	GetPublicKey(keyID string) (string, error)
+	// generateKeyPairInternal Key Management
+	generateKeyPairInternal(keyID string) (*KeyPair, error)
+	GetPublicKey(keyID string) (*rsa.PublicKey, error)
+	GetPrivateKey(keyID string) (*rsa.PrivateKey, error)
 	DeleteKey(keyID string) error
 	RotateKeys() error
+	GenerateAndSaveKeyPairExternal(keyID string) (*KeyPair, error)
 
-	// Encryption/Decryption
+	// EncryptData Encryption/Decryption
 	EncryptData(keyID string, plaintext []byte) ([]byte, error)
-	DecryptData(keyID string, ciphertext []byte) ([]byte, error)
+	DecryptData(keyID string, payload []byte) (string, error)
 
 	// Signing/Verification
 	SignData(keyID string, data []byte) ([]byte, error)
 	VerifySignature(keyID string, data, signature []byte) (bool, error)
-
-	// Card Operations
-	GenerateCardSignature(cardData *CardData) (string, error)
-	VerifyCardSignature(cardData *CardData, signature string) (bool, error)
-	EncryptCardData(cardData *CardData) (string, error)
-	DecryptCardData(encryptedData string) (*CardData, error)
 
 	// SignTransaction Transaction Security
 	SignTransaction(transaction *Transaction) (string, error)
@@ -56,8 +54,10 @@ type HSMInterface interface {
 	HashPIN(pin string, salt []byte) (string, error)
 	VerifyPIN(pin string, hashedPIN string) (bool, error)
 
-	// PII Operations
+	// DecryptPII PII Operations
 	DecryptPII(encryptedData string) (string, error)
+	EncryptPAN(pan string) (string, error)
+	DecryptPAN(encrypted string) (string, error)
 }
 
 // SoftwareHSM implements HSMInterface
@@ -117,17 +117,17 @@ func InitHSM(config Config) (HSMInterface, error) {
 	case "software":
 		return NewSoftwareHSM(config)
 	default:
-		return nil, fmt.Errorf("invalid HSMType: %s", config.HSMType)
+		return nil, fmt.Errorf("invalid HSM Type: %s", config.HSMType)
 	}
 }
 
 // NewSoftwareHSM initializes the software-based HSM server.
 func NewSoftwareHSM(config Config) (*SoftwareHSM, error) {
 	if config.MasterKey == "" {
-		return nil, errors.New("Master Key Required for software HSM")
+		return nil, errors.New("master Key Required for software HSM")
 	}
 
-	log.Println("Software HSM Initialized Successfully")
+	slog.Info("Software HSM Initialized Successfully")
 
 	// Generate or use provided salt
 	salt := config.Salt
@@ -163,10 +163,10 @@ func NewSoftwareHSM(config Config) (*SoftwareHSM, error) {
 	return hsm, nil
 }
 
-// GenerateKeyPair creates a new RSA key pair
-func (h *SoftwareHSM) GenerateKeyPair(keyID string) (*KeyPair, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// generateKeyPairInternal creates a new RSA key pair
+func (hsm *SoftwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) {
+	hsm.mu.Lock()
+	defer hsm.mu.Unlock()
 
 	// Validate keyID to prevent path traversal
 	if err := validateKeyID(keyID); err != nil {
@@ -174,7 +174,7 @@ func (h *SoftwareHSM) GenerateKeyPair(keyID string) (*KeyPair, error) {
 	}
 
 	// Check if key already exists
-	if _, exists := h.keys[keyID]; exists {
+	if _, exists := hsm.keys[keyID]; exists {
 		return nil, fmt.Errorf("key with ID %s already exists", keyID)
 	}
 
@@ -193,52 +193,97 @@ func (h *SoftwareHSM) GenerateKeyPair(keyID string) (*KeyPair, error) {
 		IsActive:   true,
 	}
 
-	h.keys[keyID] = keyPair
+	hsm.keys[keyID] = keyPair
 
 	// Save to disk
-	if err := h.saveKeyToDisk(keyPair); err != nil {
-		delete(h.keys, keyID)
+	if err := hsm.saveKeyToDisk(keyPair); err != nil {
+		delete(hsm.keys, keyID)
 		return nil, fmt.Errorf("failed to save key to disk: %w", err)
 	}
 
-	h.auditLogger.LogTransfer("KEY_GENERATED", keyID, "system", 0, "New key pair generated")
+	hsm.auditLogger.LogTransfer("KEY_GENERATED", keyID, "system", 0, "New key pair generated")
 	return keyPair, nil
 }
 
 // GetPublicKey returns the public key in PEM format
-func (h *SoftwareHSM) GetPublicKey(keyID string) (string, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (hsm *SoftwareHSM) GetPublicKey(keyID string) (*rsa.PublicKey, error) {
+	hsm.mu.RLock()
+	defer hsm.mu.RUnlock()
 
-	keyPair, exists := h.keys[keyID]
-	if !exists {
-		return "", fmt.Errorf("key %s not found", keyID)
+	// First, check in-memory keys
+	keyPair, exists := hsm.keys[keyID]
+	if exists {
+		if !keyPair.IsActive {
+			return nil, fmt.Errorf("key %s is not active", keyID)
+		}
+		return keyPair.PublicKey, nil
 	}
 
-	if !keyPair.IsActive {
-		return "", fmt.Errorf("key %s is not active", keyID)
-	}
-
-	// Encode public key to PEM
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(keyPair.PublicKey)
+	// If not in memory, try to load from a PEM file (for externally saved keys)
+	pemPath := filepath.Join(hsm.keyStorePath, fmt.Sprintf("%s.pem", keyID))
+	pemData, err := os.ReadFile(pemPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal public key: %w", err)
+		// If file doesn't exist, then the key is truly not found
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("key %s not found in memory or as a PEM file", keyID)
+		}
+		// For other errors (e.g., permissions), return the error
+		return nil, fmt.Errorf("failed to read public key file %s: %w", pemPath, err)
 	}
 
-	publicKeyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PUBLIC KEY",
-		Bytes: publicKeyBytes,
-	})
+	// Decode the PEM data
+	block, _ := pem.Decode(pemData)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, fmt.Errorf("failed to decode PEM block containing public key from %s", pemPath)
+	}
 
-	return string(publicKeyPEM), nil
+	// Parse the key
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key from %s: %w", pemPath, err)
+	}
+
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("key in %s is not an RSA public key", pemPath)
+	}
+
+	return rsaPub, nil
+}
+
+func (hsm *SoftwareHSM) GetPrivateKey(keyID string) (*rsa.PrivateKey, error) {
+	hsm.mu.RLock()
+	defer hsm.mu.RUnlock()
+
+	if keyPair, exists := hsm.keys[keyID]; exists {
+		if !keyPair.IsActive {
+			return nil, fmt.Errorf("key %s is not active", keyID)
+		}
+		return keyPair.PrivateKey, nil
+	}
+
+	// Fall back to PEM file (for keys created by GenerateAndSaveKeyPairExternal)
+	pemPath := filepath.Join(hsm.keyStorePath, fmt.Sprintf("%s.pem", keyID))
+	pemData, err := os.ReadFile(pemPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("key %s not found", keyID)
+		}
+		return nil, fmt.Errorf("failed to read private key file %s: %w", pemPath, err)
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block for key %s", keyID)
+	}
+	return x509.ParsePKCS1PrivateKey(block.Bytes)
 }
 
 // EncryptData encrypts data using AES-GCM
-func (h *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (hsm *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error) {
+	hsm.mu.RLock()
+	defer hsm.mu.RUnlock()
 
-	_, exists := h.keys[keyID]
+	_, exists := hsm.keys[keyID]
 	if !exists {
 		return nil, fmt.Errorf("key %s not found", keyID)
 	}
@@ -250,7 +295,7 @@ func (h *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error
 	}
 
 	// Create AES-GCM cipher
-	block, err := aes.NewCipher(h.masterKey)
+	block, err := aes.NewCipher(hsm.masterKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
@@ -271,49 +316,74 @@ func (h *SoftwareHSM) EncryptData(keyID string, plaintext []byte) ([]byte, error
 	return result, nil
 }
 
-// DecryptData decrypts AES-GCM encrypted data
-func (h *SoftwareHSM) DecryptData(keyID string, ciphertext []byte) ([]byte, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+// DecryptData decrypts a hybrid-encrypted payload produced by the client.
+// Format: [2 bytes LE: RSA key len] + [RSA-OAEP encrypted 32-byte key] + [12 bytes: IV] + [NaCl secretbox ciphertext]
+// The client pads the 12-byte IV to 24 bytes (NaCl nonce size) with trailing zeros.
+func (hsm *SoftwareHSM) DecryptData(keyID string, payload []byte) (string, error) {
+	slog.Debug("hsm.decrypt_data.start", "key_id", keyID, "payload_len", len(payload))
 
-	if _, exists := h.keys[keyID]; !exists {
-		return nil, fmt.Errorf("key %s not found", keyID)
+	if len(payload) < 2 {
+		return "", fmt.Errorf("payload too short: got %d bytes", len(payload))
 	}
 
-	if len(ciphertext) < 12 {
-		return nil, errors.New("ciphertext too short")
-	}
-
-	// Extract nonce
-	nonce := ciphertext[:12]
-	ciphertext = ciphertext[12:]
-
-	// Create AES-GCM cipher
-	block, err := aes.NewCipher(h.masterKey)
+	privateKey, err := hsm.GetPrivateKey(keyID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
+		slog.Error("hsm.decrypt_data.get_private_key_failed", "key_id", keyID, "error", err)
+		return "", fmt.Errorf("failed to get private key: %w", err)
+	}
+	slog.Debug("hsm.decrypt_data.private_key_loaded", "key_id", keyID, "key_size_bits", privateKey.Size()*8)
+
+	// Extract the RSA-encrypted key length (first 2 bytes, little-endian)
+	rsaKeyLen := int(binary.LittleEndian.Uint16(payload[:2]))
+	offset := 2
+	slog.Debug("hsm.decrypt_data.envelope", "rsa_key_len", rsaKeyLen, "total_payload_len", len(payload))
+
+	if offset+rsaKeyLen+12 > len(payload) {
+		return "", fmt.Errorf("payload too short: need %d bytes, got %d", offset+rsaKeyLen+12, len(payload))
 	}
 
-	gcm, err := cipher.NewGCM(block)
+	// Decrypt the wrapped symmetric key with RSA-OAEP (nil label = WebCrypto default)
+	encryptedKey := payload[offset : offset+rsaKeyLen]
+	offset += rsaKeyLen
+
+	keyBytes, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, privateKey, encryptedKey, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
+		slog.Error("hsm.decrypt_data.rsa_oaep_failed", "key_id", keyID, "encrypted_key_len", len(encryptedKey), "error", err)
+		return "", fmt.Errorf("RSA decryption failed: %w", err)
+	}
+	if len(keyBytes) != 32 {
+		slog.Error("hsm.decrypt_data.invalid_key_len", "got", len(keyBytes))
+		return "", fmt.Errorf("decrypted key has unexpected length %d, want 32", len(keyBytes))
+	}
+	slog.Debug("hsm.decrypt_data.key_decrypted", "key_len", len(keyBytes))
+
+	// Build the 24-byte NaCl nonce: 12-byte IV from payload + 12 zero bytes (matches client padding)
+	var nonce [24]byte
+	copy(nonce[:12], payload[offset:offset+12])
+	offset += 12
+
+	ciphertext := payload[offset:]
+	slog.Debug("hsm.decrypt_data.secretbox", "ciphertext_len", len(ciphertext))
+
+	var secretKey [32]byte
+	copy(secretKey[:], keyBytes)
+
+	plaintext, ok := secretbox.Open(nil, ciphertext, &nonce, &secretKey)
+	if !ok {
+		slog.Error("hsm.decrypt_data.secretbox_open_failed", "ciphertext_len", len(ciphertext))
+		return "", fmt.Errorf("secretbox decryption failed: authentication tag mismatch")
 	}
 
-	// Decrypt data
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, nil
+	slog.Debug("hsm.decrypt_data.success", "plaintext_len", len(plaintext))
+	return string(plaintext), nil
 }
 
 // SignData signs data with RSA private key
-func (h *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (hsm *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
+	hsm.mu.RLock()
+	defer hsm.mu.RUnlock()
 
-	keyPair, exists := h.keys[keyID]
+	keyPair, exists := hsm.keys[keyID]
 	if !exists {
 		return nil, fmt.Errorf("key %s not found", keyID)
 	}
@@ -335,11 +405,11 @@ func (h *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
 }
 
 // VerifySignature verifies RSA signature
-func (h *SoftwareHSM) VerifySignature(keyID string, data, signature []byte) (bool, error) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (hsm *SoftwareHSM) VerifySignature(keyID string, data, signature []byte) (bool, error) {
+	hsm.mu.RLock()
+	defer hsm.mu.RUnlock()
 
-	keyPair, exists := h.keys[keyID]
+	keyPair, exists := hsm.keys[keyID]
 	if !exists {
 		return false, fmt.Errorf("key %s not found", keyID)
 	}
@@ -356,59 +426,15 @@ func (h *SoftwareHSM) VerifySignature(keyID string, data, signature []byte) (boo
 	return true, nil
 }
 
-// GenerateCardSignature creates a signature for card data
-func (h *SoftwareHSM) GenerateCardSignature(cardData *CardData) (string, error) {
-	// Create data to sign
-	data := fmt.Sprintf("%s:%s:%.2f:%s:%d:%s",
-		cardData.CardID,
-		cardData.UserID,
-		cardData.Balance,
-		cardData.Currency,
-		cardData.TxCounter,
-		cardData.LastUpdated.Format(time.RFC3339),
-	)
-
-	// Sign with card key
-	signature, err := h.SignData("card_signing", []byte(data))
-	if err != nil {
-		return "", fmt.Errorf("failed to sign card data: %w", err)
-	}
-
-	// Encode signature to base64
-	return base64.StdEncoding.EncodeToString(signature), nil
-}
-
-// VerifyCardSignature verifies card signature
-func (h *SoftwareHSM) VerifyCardSignature(cardData *CardData, signature string) (bool, error) {
-	// Create data to verify
-	data := fmt.Sprintf("%s:%s:%.2f:%s:%d:%s",
-		cardData.CardID,
-		cardData.UserID,
-		cardData.Balance,
-		cardData.Currency,
-		cardData.TxCounter,
-		cardData.LastUpdated.Format(time.RFC3339),
-	)
-
-	// Decode signature
-	sigBytes, err := base64.StdEncoding.DecodeString(signature)
-	if err != nil {
-		return false, fmt.Errorf("invalid signature format: %w", err)
-	}
-
-	// Verify signature
-	return h.VerifySignature("card_signing", []byte(data), sigBytes)
-}
-
 // SignTransaction signs a transaction
-func (h *SoftwareHSM) SignTransaction(transaction *Transaction) (string, error) {
+func (hsm *SoftwareHSM) SignTransaction(transaction *Transaction) (string, error) {
 	// Create data to sign
 	data, err := json.Marshal(transaction)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal transaction for signing: %w", err)
 	}
 	// Sign with transaction key
-	signature, err := h.SignData("transaction_signing", []byte(data))
+	signature, err := hsm.SignData("transaction_signing", []byte(data))
 	if err != nil {
 		return "", fmt.Errorf("failed to sign transaction: %w", err)
 	}
@@ -417,7 +443,7 @@ func (h *SoftwareHSM) SignTransaction(transaction *Transaction) (string, error) 
 }
 
 // VerifyTransaction verifies transaction signature
-func (h *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature string) (bool, error) {
+func (hsm *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature string) (bool, error) {
 	// Create data to verify
 	data, err := json.Marshal(transaction)
 	if err != nil {
@@ -430,22 +456,22 @@ func (h *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature stri
 	}
 
 	// Verify signature
-	if valid, _ := h.VerifySignature("transaction_signing", []byte(data), sigBytes); valid {
+	if valid, _ := hsm.VerifySignature("transaction_signing", []byte(data), sigBytes); valid {
 		return true, nil
 	}
 
 	// If primary key fails, try archived keys (fallback for rotated keys)
 	var archivedKeys []string
-	h.mu.RLock()
-	for k := range h.keys {
+	hsm.mu.RLock()
+	for k := range hsm.keys {
 		if strings.HasPrefix(k, "transaction_signing_") {
 			archivedKeys = append(archivedKeys, k)
 		}
 	}
-	h.mu.RUnlock()
+	hsm.mu.RUnlock()
 
 	for _, keyID := range archivedKeys {
-		if valid, _ := h.VerifySignature(keyID, []byte(data), sigBytes); valid {
+		if valid, _ := hsm.VerifySignature(keyID, []byte(data), sigBytes); valid {
 			return true, nil
 		}
 	}
@@ -453,23 +479,72 @@ func (h *SoftwareHSM) VerifyTransaction(transaction *Transaction, signature stri
 	return false, nil
 }
 
-// DecryptPII decrypts PII data using the user_encryption key
-func (h *SoftwareHSM) DecryptPII(encryptedData string) (string, error) {
-	data, err := base64.StdEncoding.DecodeString(encryptedData)
+// EncryptPAN encrypts a plaintext PAN for storage using AES-GCM with the master key.
+func (hsm *SoftwareHSM) EncryptPAN(pan string) (string, error) {
+	block, err := aes.NewCipher(hsm.masterKey)
 	if err != nil {
-		return "", fmt.Errorf("invalid base64 PII data: %w", err)
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(pan), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// DecryptPAN decrypts a PAN that was encrypted with EncryptPAN.
+func (hsm *SoftwareHSM) DecryptPAN(encrypted string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", fmt.Errorf("invalid base64: %w", err)
+	}
+	block, err := aes.NewCipher(hsm.masterKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	if err != nil {
+		return "", fmt.Errorf("decryption failed: %w", err)
+	}
+	return string(plaintext), nil
+}
+
+// DecryptPII Decrypts PII Data
+func (hsm *SoftwareHSM) DecryptPII(encryptedData string) (string, error) {
+	slog.Debug("hsm.decrypt_pii.start", "encoded_len", len(encryptedData))
+
+	payload, err := base64.StdEncoding.DecodeString(encryptedData)
+	if err != nil {
+		slog.Error("hsm.decrypt_pii.base64_failed", "error", err)
+		return "", fmt.Errorf("invalid Base64 PII Data: %w", err)
+	}
+	slog.Debug("hsm.decrypt_pii.decoded", "payload_len", len(payload))
+
+	decrypted, err := hsm.DecryptData("app_signing_private", payload)
+	if err != nil {
+		slog.Error("hsm.decrypt_pii.failed", "error", err)
+		return "", fmt.Errorf("failed to Decrypt PII: %w", err)
 	}
 
-	decrypted, err := h.DecryptData("user_encryption", data)
-	if err != nil {
-		return "", fmt.Errorf("failed to decrypt PII: %w", err)
-	}
-
-	return string(decrypted), nil
+	slog.Debug("hsm.decrypt_pii.success")
+	return decrypted, nil
 }
 
 // HashPIN hashes a PIN using Argon2
-func (h *SoftwareHSM) HashPIN(pin string, salt []byte) (string, error) {
+func (hsm *SoftwareHSM) HashPIN(pin string, salt []byte) (string, error) {
 	if len(salt) == 0 {
 		salt = make([]byte, 16)
 		if _, err := rand.Read(salt); err != nil {
@@ -489,7 +564,7 @@ func (h *SoftwareHSM) HashPIN(pin string, salt []byte) (string, error) {
 }
 
 // VerifyPIN verifies a PIN against its hash
-func (h *SoftwareHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
+func (hsm *SoftwareHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 	// Decode hashed PIN
 	decoded, err := base64.StdEncoding.DecodeString(hashedPIN)
 	if err != nil {
@@ -512,16 +587,16 @@ func (h *SoftwareHSM) VerifyPIN(pin string, hashedPIN string) (bool, error) {
 }
 
 // RotateKeys rotates expired or compromised keys
-func (h *SoftwareHSM) RotateKeys() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (hsm *SoftwareHSM) RotateKeys() error {
+	hsm.mu.Lock()
+	defer hsm.mu.Unlock()
 
 	// Collect keys to rotate first to avoid modifying map during iteration
 	var rotated []string
 	var keysToRotate []string
 	now := time.Now()
 
-	for keyID, keyPair := range h.keys {
+	for keyID, keyPair := range hsm.keys {
 		// Only rotate base keys (not archived ones) that are expired or inactive
 		if (now.After(keyPair.ExpiresAt) || !keyPair.IsActive) && !strings.Contains(keyID, "_1") {
 			keysToRotate = append(keysToRotate, keyID)
@@ -529,46 +604,46 @@ func (h *SoftwareHSM) RotateKeys() error {
 	}
 
 	for _, keyID := range keysToRotate {
-		oldKeyPair := h.keys[keyID]
+		oldKeyPair := hsm.keys[keyID]
 
 		// 1. Archive the old key
 		archiveID := fmt.Sprintf("%s_%d", keyID, now.Unix())
 		archivedKey := *oldKeyPair // Shallow copy
 		archivedKey.ID = archiveID
 		archivedKey.IsActive = false // Archived keys cannot be used for new signing
-		h.keys[archiveID] = &archivedKey
-		h.saveKeyToDisk(&archivedKey)
+		hsm.keys[archiveID] = &archivedKey
+		hsm.saveKeyToDisk(&archivedKey)
 
 		// 2. Generate new key for the base ID
-		newKeyPair, err := h.generateKeyPairInternal(keyID)
+		newKeyPair, err := hsm.generateKeyPairInternal(keyID)
 		if err != nil {
-			h.auditLogger.LogError(keyID, keyID, err)
+			hsm.auditLogger.LogError(keyID, keyID, err)
 			continue
 		}
-		h.keys[keyID] = newKeyPair
-		h.saveKeyToDisk(newKeyPair)
+		hsm.keys[keyID] = newKeyPair
+		hsm.saveKeyToDisk(newKeyPair)
 
 		rotated = append(rotated, keyID)
 
-		h.auditLogger.LogTransfer("KEY_ROTATED", keyID, archiveID, 0, "Key rotated")
+		hsm.auditLogger.LogTransfer("KEY_ROTATED", keyID, archiveID, 0, "Key rotated")
 	}
 
-	h.auditLogger.LogTransfer("KEY_ROTATION_COMPLETE", "system", "system", int64(len(rotated)), "Key rotation complete")
+	hsm.auditLogger.LogTransfer("KEY_ROTATION_COMPLETE", "system", "system", int64(len(rotated)), "Key rotation complete")
 
 	return nil
 }
 
 // DeleteKey removes a key from the HSM
-func (h *SoftwareHSM) DeleteKey(keyID string) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (hsm *SoftwareHSM) DeleteKey(keyID string) error {
+	hsm.mu.Lock()
+	defer hsm.mu.Unlock()
 
-	if _, exists := h.keys[keyID]; !exists {
+	if _, exists := hsm.keys[keyID]; !exists {
 		return fmt.Errorf("key %s not found", keyID)
 	}
 
 	// Delete from memory
-	delete(h.keys, keyID)
+	delete(hsm.keys, keyID)
 
 	// Validate keyID to prevent path traversal
 	if err := validateKeyID(keyID); err != nil {
@@ -576,25 +651,25 @@ func (h *SoftwareHSM) DeleteKey(keyID string) error {
 	}
 
 	// Delete from disk using secure path construction
-	keyPath := filepath.Join(h.keyStorePath, keyID+".key")
+	keyPath := filepath.Join(hsm.keyStorePath, keyID+".key")
 	if err := os.Remove(keyPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete key file: %w", err)
 	}
 
-	h.auditLogger.LogTransfer("KEY_DELETED", keyID, "system", 0, "Key deleted from HSM")
+	hsm.auditLogger.LogTransfer("KEY_DELETED", keyID, "system", 0, "Key deleted from HSM")
 	return nil
 }
 
 // Private helper methods
-func (h *SoftwareHSM) loadKeys() error {
-	if h.keyStorePath == "" {
+func (hsm *SoftwareHSM) loadKeys() error {
+	if hsm.keyStorePath == "" {
 		return nil
 	}
 
-	files, err := os.ReadDir(h.keyStorePath)
+	files, err := os.ReadDir(hsm.keyStorePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return os.MkdirAll(h.keyStorePath, 0700)
+			return os.MkdirAll(hsm.keyStorePath, 0700)
 		}
 		return err
 	}
@@ -604,14 +679,14 @@ func (h *SoftwareHSM) loadKeys() error {
 			continue
 		}
 
-		keyPath := filepath.Join(h.keyStorePath, file.Name())
+		keyPath := filepath.Join(hsm.keyStorePath, file.Name())
 		keyData, err := os.ReadFile(keyPath)
 		if err != nil {
 			continue
 		}
 
 		// Decrypt key data
-		decrypted, err := h.decryptWithMasterKey(keyData)
+		decrypted, err := hsm.decryptWithMasterKey(keyData)
 		if err != nil {
 			continue
 		}
@@ -622,14 +697,14 @@ func (h *SoftwareHSM) loadKeys() error {
 			continue
 		}
 
-		h.keys[keyPair.ID] = &keyPair
+		hsm.keys[keyPair.ID] = &keyPair
 	}
 
 	return nil
 }
 
-func (h *SoftwareHSM) saveKeyToDisk(keyPair *KeyPair) error {
-	if h.keyStorePath == "" {
+func (hsm *SoftwareHSM) saveKeyToDisk(keyPair *KeyPair) error {
+	if hsm.keyStorePath == "" {
 		return nil
 	}
 
@@ -640,7 +715,7 @@ func (h *SoftwareHSM) saveKeyToDisk(keyPair *KeyPair) error {
 	}
 
 	// Encrypt with master key
-	encrypted, err := h.encryptWithMasterKey(keyData)
+	encrypted, err := hsm.encryptWithMasterKey(keyData)
 	if err != nil {
 		return err
 	}
@@ -651,12 +726,12 @@ func (h *SoftwareHSM) saveKeyToDisk(keyPair *KeyPair) error {
 	}
 
 	// Save to file using secure path construction
-	keyPath := filepath.Join(h.keyStorePath, keyPair.ID+".key")
+	keyPath := filepath.Join(hsm.keyStorePath, keyPair.ID+".key")
 	return os.WriteFile(keyPath, encrypted, 0600)
 }
 
-func (h *SoftwareHSM) encryptWithMasterKey(data []byte) ([]byte, error) {
-	block, err := aes.NewCipher(h.masterKey)
+func (hsm *SoftwareHSM) encryptWithMasterKey(data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(hsm.masterKey)
 	if err != nil {
 		return nil, err
 	}
@@ -675,8 +750,8 @@ func (h *SoftwareHSM) encryptWithMasterKey(data []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-func (h *SoftwareHSM) decryptWithMasterKey(data []byte) ([]byte, error) {
-	block, err := aes.NewCipher(h.masterKey)
+func (hsm *SoftwareHSM) decryptWithMasterKey(data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(hsm.masterKey)
 	if err != nil {
 		return nil, err
 	}
@@ -695,30 +770,68 @@ func (h *SoftwareHSM) decryptWithMasterKey(data []byte) ([]byte, error) {
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
-func (h *SoftwareHSM) generateDefaultKeys() error {
+func (hsm *SoftwareHSM) generateDefaultKeys() error {
 	// Generate card signing key
-	if _, err := h.GenerateKeyPair("card_signing"); err != nil {
+	if _, err := hsm.generateKeyPairInternal("card_signing"); err != nil {
 		return err
 	}
 
 	// Generate transaction signing key
-	if _, err := h.GenerateKeyPair("transaction_signing"); err != nil {
-		return err
-	}
-
-	// Generate user encryption key
-	if _, err := h.GenerateKeyPair("user_encryption"); err != nil {
+	if _, err := hsm.generateKeyPairInternal("transaction_signing"); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (h *SoftwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) {
+func (hsm *SoftwareHSM) GenerateAndSaveKeyPairExternal(keyID string) (*KeyPair, error) {
+	slog.Info(fmt.Sprintf("Generating %d-bit RSA key pair...\n", 2048))
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	// 2. Save Private Key to file (private.pem)
+	// PKCS1 is the standard format for RSA Private Keys
+	privPath := filepath.Join(hsm.keyStorePath, fmt.Sprintf("%s_private.pem", keyID))
+	privateKeyFile, err := os.OpenFile(privPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return nil, err
 	}
+	defer privateKeyFile.Close()
+
+	privateKeyBlock := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	}
+	if err := pem.Encode(privateKeyFile, privateKeyBlock); err != nil {
+		return nil, err
+	}
+
+	// 3. Save Public Key to file (public.pem)
+	// PKIX is the standard format for RSA Public Keys
+	pubPath := filepath.Join(hsm.keyStorePath, fmt.Sprintf("%s_public.pem", keyID))
+	pubFile, err := os.OpenFile(pubPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer pubFile.Close()
+
+	// Use MarshalPKIXPublicKey for compatibility with WebCrypto (SPKI)
+	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	pubBlock := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: pubBytes,
+	}
+	if err := pem.Encode(pubFile, pubBlock); err != nil {
+		return nil, err
+	}
+
+	slog.Info(fmt.Sprintf("Success! Keys saved to %s and %s", privPath, pubPath))
 
 	return &KeyPair{
 		ID:         keyID,
@@ -731,7 +844,7 @@ func (h *SoftwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) {
 }
 
 // EncryptCardData encrypts card data to a base64 string
-func (h *SoftwareHSM) EncryptCardData(cardData *CardData) (string, error) {
+func (hsm *SoftwareHSM) EncryptCardData(cardData *CardData) (string, error) {
 	// Serialize card data
 	data, err := json.Marshal(cardData)
 	if err != nil {
@@ -739,35 +852,12 @@ func (h *SoftwareHSM) EncryptCardData(cardData *CardData) (string, error) {
 	}
 
 	// Encrypt with card encryption key
-	encrypted, err := h.EncryptData("user_encryption", data)
+	encrypted, err := hsm.EncryptData("user_encryption", data)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt card data: %w", err)
 	}
 
 	return base64.StdEncoding.EncodeToString(encrypted), nil
-}
-
-// DecryptCardData decrypts base64 encoded card data
-func (h *SoftwareHSM) DecryptCardData(encryptedData string) (*CardData, error) {
-	// Decode base64
-	encrypted, err := base64.StdEncoding.DecodeString(encryptedData)
-	if err != nil {
-		return nil, fmt.Errorf("invalid encrypted data format: %w", err)
-	}
-
-	// Decrypt data
-	decrypted, err := h.DecryptData("user_encryption", encrypted)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt card data: %w", err)
-	}
-
-	// Unmarshal card data
-	var cardData CardData
-	if err := json.Unmarshal(decrypted, &cardData); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal card data: %w", err)
-	}
-
-	return &cardData, nil
 }
 
 func deriveKey(password, salt string, keyLen uint32) []byte {
