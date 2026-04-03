@@ -1233,6 +1233,47 @@ const docTemplate = `{
                 }
             }
         },
+        "/card/bin": {
+            "get": {
+                "description": "Retrieve information about a card BIN",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cards"
+                ],
+                "summary": "Query Card BIN",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Card BIN (first 6-8 digits)",
+                        "name": "bin",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/cards/activate": {
             "post": {
                 "description": "Activate a provisioned NFC card",
@@ -1277,47 +1318,6 @@ const docTemplate = `{
                                 "status": {
                                     "type": "string"
                                 }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/cards/bins": {
-            "get": {
-                "description": "Retrieve information about a card BIN",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "cards"
-                ],
-                "summary": "Query Card BIN",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Card BIN (first 6-8 digits)",
-                        "name": "bin",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
                             }
                         }
                     },
@@ -3377,7 +3377,7 @@ const docTemplate = `{
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
 	Version:          "1.0",
-	Host:             "localhost:8080",
+	Host:             "api.ruralpay.com",
 	BasePath:         "/api/v1",
 	Schemes:          []string{"http", "https"},
 	Title:            "RuralPay Backend API",

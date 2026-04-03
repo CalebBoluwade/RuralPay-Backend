@@ -49,7 +49,7 @@ func (h *piiMaskingHandler) Handle(ctx context.Context, r slog.Record) error {
 	masked := slog.NewRecord(r.Time, r.Level, maskPII(r.Message), r.PC)
 	r.Attrs(func(a slog.Attr) bool {
 		masked.AddAttrs(maskAttr(a))
-		return false
+		return true
 	})
 	return h.inner.Handle(ctx, masked)
 }
