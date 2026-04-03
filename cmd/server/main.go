@@ -246,6 +246,7 @@ func main() {
 			r.Post("/auth/reset-password", userService.ResetPassword)
 
 			r.Get("/encryption/keys", hsmKeyService.GetUserPublicKeys)
+			r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
 		})
 
 		// General rate limit: 10 req / 10 min — register, refresh, OTP
@@ -292,8 +293,6 @@ func main() {
 
 			r.Post("/account/ussd", accountService.GenerateUSSDCode)
 			r.Get("/account/ussd", accountService.ValidateUSSDCode)
-
-			r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
 
 			// Unified payment endpoint
 			r.Post("/payment", paymentHandler.HandlePayment)
