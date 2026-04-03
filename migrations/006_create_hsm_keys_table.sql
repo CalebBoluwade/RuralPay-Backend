@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS hsm_keys (
     id SERIAL PRIMARY KEY,
     key_id VARCHAR(255) UNIQUE NOT NULL,
     key_type VARCHAR(50) NOT NULL CHECK (key_type IN ('RSA', 'AES', 'ECDSA')),
-    key_usage VARCHAR(50) NOT NULL CHECK (key_usage IN ('signing', 'encryption', 'card_signing', 'transaction_signing', 'user_encryption')),
+    key_usage VARCHAR(50) NOT NULL CHECK (key_usage IN ('transaction_signing')),
     key_size INTEGER NOT NULL,
     public_key TEXT,
     encrypted_private_key TEXT,
