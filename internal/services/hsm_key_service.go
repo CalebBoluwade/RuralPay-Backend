@@ -133,7 +133,7 @@ func (s *HSMKeyService) GetUserPublicKeys(w http.ResponseWriter, r *http.Request
 	publicKey, err := s.hsm.GetPublicKey("app_signing_public")
 
 	if err != nil {
-		utils.SendErrorResponse(w, "Public Key Not Found", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, "Public Key Not Found", http.StatusNotFound, nil)
 		return
 	}
 
