@@ -237,6 +237,8 @@ func main() {
 		})
 
 		// Public endpoints (no auth required)
+		r.Get("/encryption/keys", hsmKeyService.GetUserPublicKeys)
+		r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
 
 		// Strict rate limit: 5 req / 15 min — login, password reset
 		r.Group(func(r chi.Router) {
@@ -244,9 +246,6 @@ func main() {
 			r.Post("/auth/login", userService.UserLogin)
 			r.Post("/auth/forgot-password", userService.ForgotPassword)
 			r.Post("/auth/reset-password", userService.ResetPassword)
-
-			r.Get("/encryption/keys", hsmKeyService.GetUserPublicKeys)
-			r.Put("/encryption/keys", hsmKeyService.CreateNewKeysExternal)
 		})
 
 		// General rate limit: 10 req / 10 min — register, refresh, OTP
