@@ -3,14 +3,11 @@ package services
 import (
 	"context"
 	"crypto/rand"
-	"crypto/rsa"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/moov-io/iso8583"
 	"github.com/moov-io/iso8583/encoding"
@@ -23,11 +20,9 @@ import (
 )
 
 type ISO8583Service struct {
-	db         *sql.DB
-	HSM        hsm.HSMInterface
-	spec       *iso8583.MessageSpec
-	senderPriv *rsa.PrivateKey
-	nibssPub   *rsa.PublicKey
+	db   *sql.DB
+	HSM  hsm.HSMInterface
+	spec *iso8583.MessageSpec
 }
 
 func NewISO8583Service(db *sql.DB, hsmInstance hsm.HSMInterface) models.ISO8583Service {
@@ -37,63 +32,7 @@ func NewISO8583Service(db *sql.DB, hsmInstance hsm.HSMInterface) models.ISO8583S
 		spec: createISO8583Spec(),
 	}
 
-	if privPath := viper.GetString("iso8583.signing_key_path"); privPath != "" {
-		if pem, err := os.ReadFile(privPath); err == nil {
-			svc.senderPriv, _ = utils.ParseRSAPrivateKey(pem)
-			slog.Info("iso8583.keys.sender_loaded", "path", privPath)
-		} else {
-			slog.Error("iso8583.keys.sender_load_failed", "path", privPath, "error", err)
-		}
-	} else {
-		slog.Warn("iso8583.keys.sender_not_configured")
-	}
-
-	if pubPath := viper.GetString("iso8583.nibss_pub_key_path"); pubPath != "" {
-		if pem, err := os.ReadFile(pubPath); err == nil {
-			svc.nibssPub, _ = utils.ParseRSAPublicKey(pem)
-			slog.Info("iso8583.keys.nibss_pub_loaded", "path", pubPath)
-		} else {
-			slog.Error("iso8583.keys.nibss_pub_load_failed", "path", pubPath, "error", err)
-		}
-	} else {
-		slog.Warn("iso8583.keys.nibss_pub_not_configured")
-	}
-
 	return svc
-}
-
-// SignAndSealPayload signs and encrypts a binary payload for NIBSS using the sender private key
-// and NIBSS public key. Returns the sealed message serialized as JSON.
-func (s *ISO8583Service) SignAndSealPayload(payload []byte) ([]byte, error) {
-	if s.senderPriv == nil {
-		slog.Error("nibss.sign.no_sender_key")
-		return nil, fmt.Errorf("sender signing key not configured")
-	}
-	if s.nibssPub == nil {
-		slog.Error("nibss.sign.no_nibss_pub_key")
-		return nil, fmt.Errorf("NIBSS public key not configured")
-	}
-
-	slog.Debug("nibss.sign.sealing", "payload_len", len(payload))
-	sealed, err := utils.SealMessage(payload, s.senderPriv, s.nibssPub)
-	if err != nil {
-		slog.Error("nibss.sign.seal_failed", "error", err)
-		return nil, fmt.Errorf("failed to seal message: %w", err)
-	}
-	slog.Debug("nibss.sign.sealed",
-		"encrypted_payload_len", len(sealed.EncryptedPayload),
-		"wrapped_key_len", len(sealed.WrappedKey),
-		"signature_len", len(sealed.Signature),
-	)
-
-	out, err := json.Marshal(sealed)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal sealed message: %w", err)
-	}
-	slog.Info("nibss.sign.success", "sealed_len", len(out))
-	slog.Debug("nibss.sign.payload_hex", "iso8583_hex", fmt.Sprintf("%x", payload))
-	slog.Debug("nibss.sign.sealed_json", "sealed", string(out))
-	return out, nil
 }
 
 // processingCode derives the ISO 8583 Field 3 processing code from txType.

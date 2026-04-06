@@ -42,6 +42,8 @@ func init() {
 
 	_ = viper.BindEnv("jwt.secret_key", "JWT_SECRET_KEY")
 	_ = viper.BindEnv("jwt.expiry_minutes", "JWT_EXPIRY_MINUTES")
+	viper.SetDefault("jwt.expiry_minutes", 15)
+
 	_ = viper.BindEnv("jwt.issuer", "JWT_ISSUER")
 	_ = viper.BindEnv("jwt.audience", "JWT_AUDIENCE")
 	_ = viper.BindEnv("argon2.time", "ARGON2_TIME")
@@ -88,8 +90,6 @@ func init() {
 
 	// ISO 8583 (card payment settlement)
 	_ = viper.BindEnv("iso8583.base_url", "ISO8583_BASE_URL")
-	_ = viper.BindEnv("iso8583.signing_key_path", "ISO8583_SIGNING_KEY_PATH")
-	_ = viper.BindEnv("iso8583.nibss_pub_key_path", "ISO8583_NIBSS_PUB_KEY_PATH")
 	_ = viper.BindEnv("iso8583.acquiring_institution_id", "ISO8583_ACQUIRING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.forwarding_institution_id", "ISO8583_FORWARDING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.terminal_id", "ISO8583_TERMINAL_ID")
@@ -118,7 +118,10 @@ func init() {
 	viper.SetDefault("app.name", "RuralPay")
 
 	_ = viper.BindEnv("session.inactivity_ttl_minutes", "SESSION_INACTIVITY_TTL_MINUTES")
+	viper.SetDefault("session.inactivity_ttl_minutes", 5)
+
 	_ = viper.BindEnv("session.absolute_ttl_minutes", "SESSION_ABSOLUTE_TTL_MINUTES")
+	viper.SetDefault("session.absolute_ttl_minutes", 15)
 
 	_ = viper.BindEnv("user.default_daily_limit", "USER_DEFAULT_DAILY_LIMIT")
 	_ = viper.BindEnv("user.default_single_tx_limit", "USER_DEFAULT_SINGLE_TX_LIMIT")

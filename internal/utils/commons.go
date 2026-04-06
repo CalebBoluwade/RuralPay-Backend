@@ -29,6 +29,21 @@ func ExtractUserMerchantInfoFromContext(w http.ResponseWriter, ctx context.Conte
 	return userID, merchantID
 }
 
+func ExtractIsAdminFromContext(w http.ResponseWriter, ctx context.Context) (bool, error) {
+	isAdminStr, ok := ctx.Value("isAdmin").(string)
+	if !ok || isAdminStr == "" {
+		return false, fmt.Errorf("isAdmin not found in context")
+	}
+
+	isAdmin, err := strconv.ParseBool(isAdminStr)
+	if err != nil {
+		slog.Error("Failed to parse isAdmin from context", "value", isAdminStr, "error", err)
+		return false, fmt.Errorf("failed to parse isAdmin: %w", err)
+	}
+
+	return isAdmin, nil
+}
+
 func FormatTime(t time.Time) string {
 	duration := time.Since(t)
 	if duration.Minutes() < 60 {

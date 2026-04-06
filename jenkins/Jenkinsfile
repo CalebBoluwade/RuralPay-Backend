@@ -1,0 +1,213 @@
+@Library('jenkins-shared-library') _
+def utils = globalPipeline() // DevOps shared library 
+
+def AnsibleDeploy(){
+    sh 'curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.6.2-x86_64.rpm'
+    sh 'curl -L -O https://nibss-dev.github.io/Jenkins-Packages/filebeat/filebeat-${GIT_BRANCH}.yml'
+    //sh 'pwd && ls -al'
+    sh 'touch hosts.ini && echo ${hosts_ini} | base64 --decode > hosts.ini'
+    sh 'ANSIBLE_HOST_KEY_CHECKING=false ansible-playbook --timeout 60  -i hosts.ini ansible/playbook.yml'
+}
+
+def InjectVars(){
+    sh "touch .env && echo ${APP_ENV_RURALPAY_BACKEND} | base64 --decode > .env"
+}
+
+
+pipeline {
+    environment {
+        IMG_TAG="${sh(script: 'echo \$GIT_COMMIT | cut -c -7 | tr -d \'[:space:]\' ', returnStdout: true ) }.$BUILD_NUMBER"
+        APP_NAME="ruralpay"
+        SONAR_PROJECT_ID="nibss-dev_RuralPayBackend"
+        COLLECTION_NAME="RuralPayBackend"
+
+    }
+
+    agent {
+        dockerfile {
+            dir 'jenkins'
+            args '-v $HOME/.sonar:/root/.sonar --user root'
+            label 'built-in-node'
+        }
+    }
+
+    stages {
+
+        stage('Inject Environment Variables') {
+            parallel{
+                stage('to dev') {
+                    when {
+                        not{
+                            anyOf{
+                                branch 'qa'
+                                branch 'certification'
+                                branch 'staging'
+                                branch 'master'
+                                branch 'dr'
+                            }
+                        }
+                    }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-dev', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        sh 'env'
+                        InjectVars()
+                    }
+                }
+                stage('to qa') {
+                    when { branch 'qa' }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-qa', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        InjectVars()
+                    }
+                }
+                stage('to cert') {
+                    when { branch 'certification' }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-cert', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        InjectVars()
+                    }
+                }
+                stage('to staging') {
+                    when { branch 'staging' }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-staging', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        InjectVars()
+                    }
+                }
+
+                stage('to dr') {
+                    when { branch 'dr' }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-dr', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        InjectVars()
+                    }
+                }
+                stage('to prod') {
+                    when { branch 'master' }
+                    steps {
+                        withCredentials([file(credentialsId: 'RuralPay-prod', variable: 'PIPELINE_ENV')]) { load "$PIPELINE_ENV"}
+                        InjectVars()
+                    }
+                }
+            }
+        }
+          stage('Unit Testing'){
+            when {
+                        not{
+                            anyOf{
+                                branch 'master'
+                                branch 'dr'
+                            }
+                        }
+                    }
+            steps{
+                //sh 'ls -la'
+                sh 'pwd'
+                sh 'make test'
+            }
+        }
+
+        stage('Sonar Scanner'){
+            parallel{
+                stage('PR'){
+                    when {changeRequest()}
+                    steps{
+                        withSonarQubeEnv('SonarCloud') {
+                        sh 'make sonarqube-PR'
+                        }
+                    }
+                }
+                stage('Branch'){
+                    when { not{ changeRequest()}}
+                    steps{
+                        withSonarQubeEnv('SonarCloud') {
+                        sh 'make sonarqube-BR'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Building/Tagging image') {
+            steps{
+                script {
+                    sh 'pwd'
+                    RuralPayImage = docker.build("$APP_NAME:$IMG_TAG", ".")
+                }
+            }
+        }
+    
+        stage('Publish and Deploy'){
+           when {
+              anyOf {
+                 branch 'master'
+                 branch 'staging'
+                 branch 'certification'
+                 branch 'qa'
+                 branch 'dev'
+                 branch 'dr'
+                 
+              }
+           }
+           steps{
+                script{
+                    switch(BRANCH_NAME) {
+                      case ["master", "dr", "certification"]:  // Deployment steps for Master, DR and Certification
+                        env.DOCKER_REGISTRY        = "https://docker-registry.nibss-plc.com.ng"
+                        env.DOCKER_REGISTRY_HOST   = "docker-registry.nibss-plc.com.ng"
+                        env.DOCKER_REGISTRY_SECRET = "DockerRegistry"
+
+                        docker.withRegistry('https://docker-registry.nibss-plc.com.ng', 'DockerRegistry') {
+                            RuralPayImage.push()
+                        }
+
+                        withCredentials([usernamePassword(credentialsId: 'DockerRegistry', passwordVariable: 'REGISTRY_PASS', usernameVariable: 'REGISTRY_USER')]) {
+                            AnsibleDeploy()
+                        }
+                        break
+
+                      default: // Deployment steps for other branches
+                        env.DOCKER_REGISTRY        = "https://test-docker-registry.nibss-plc.com.ng"
+                        env.DOCKER_REGISTRY_HOST   = "test-docker-registry.nibss-plc.com.ng"
+                        env.DOCKER_REGISTRY_SECRET = "TestDockerRegistry"
+
+                        docker.withRegistry('https://test-docker-registry.nibss-plc.com.ng', 'TestDockerRegistry') {
+                           RuralPayImage.push()
+                        }
+
+                        withCredentials([usernamePassword(credentialsId: 'TestDockerRegistry', passwordVariable: 'REGISTRY_PASS', usernameVariable: 'REGISTRY_USER')]) {
+                            utils.ansibleDeployFromEnv()
+                        }
+                        break
+                    }
+                }
+            }
+        }
+    }
+    post {
+            always {
+            //     script {
+            //     if (env.BRANCH_NAME == 'qa' || env.BRANCH_NAME.startsWith('QA-SKP')) {
+            //         try {
+            //             archiveArtifacts 'newman/*.html'
+            //             publishHTML(target: [
+            //                 allowMissing: true,
+            //                 alwaysLinkToLastBuild: false,
+            //                 keepAll: false,
+            //                 reportDir: 'newman/',
+            //                 reportFiles: 'newman/*.html',
+            //                 reportName: 'Regression Test Report',
+            //                 reportTitles: 'The Report'
+            //             ])
+            //         } catch (Exception e) {
+            //             currentBuild.result = 'UNSTABLE'
+            //             echo "Error occurred: ${e.message}"
+            //         }
+            //     } else {
+            //         echo "Not on the 'qa' branch. Skipping HTML export, archiving, and publishing."
+            //     }
+            // }
+                cleanWs()
+        }
+    }
+}

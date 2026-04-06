@@ -22,6 +22,7 @@ const (
 	InvalidCreds         ResponseMessage = "Invalid Credentials"
 	AccountNotFoundError ResponseMessage = "Account Not Found"
 	UserNotFoundError    ResponseMessage = "User Not Found"
+	GenerateTokenError   ResponseMessage = "Failed to Generate Token"
 	TokenError           ResponseMessage = "Invalid or Expired Reset Token"
 	OTPError             ResponseMessage = "Invalid or Expired OTP"
 	PasswordResetError   ResponseMessage = "Failed to Reset Password"

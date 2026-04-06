@@ -13,13 +13,14 @@ import (
 )
 
 type BINResponse struct {
-	BIN        string `json:"bin"`
-	Scheme     string `json:"scheme"`     // Visa, Mastercard, Verve
-	IssuerBank string `json:"issuerBank"` // GTBank, Zenith, etc.
-	Type       string `json:"type"`       // Debit, Credit
-	Country    string `json:"country"`    // NG, US
-	Currency   string `json:"currency"`   // NGN, USD
-	Source     string `json:"source"`     // "internal" or "external"
+	BIN            string `json:"bin"`
+	Scheme         string `json:"scheme"`     // Visa, Mastercard, Verve
+	IssuerBank     string `json:"issuerBank"` // GTBank, Zenith, etc.
+	IssuerBankLogo string `json:"issuerBankLogo,omitempty"`
+	Type           string `json:"type"`     // Debit, Credit
+	Country        string `json:"country"`  // NG, US
+	Currency       string `json:"currency"` // NGN, USD
+	Source         string `json:"source"`   // "internal" or "external"
 }
 
 type CardInfo struct {
@@ -56,7 +57,6 @@ type ISO8583Service interface {
 	ProcessMessage(ctx context.Context, rawMsg []byte) ([]byte, error)
 	BuildAuthorizationResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
 	BuildFinancialResponse(msg *iso8583.Message, responseCode string) (*iso8583.Message, error)
-	SignAndSealPayload(payload []byte) ([]byte, error)
 }
 
 type AuthorizationRequest struct {

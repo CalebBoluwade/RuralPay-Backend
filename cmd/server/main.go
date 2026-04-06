@@ -252,9 +252,8 @@ func main() {
 		r.Group(func(r chi.Router) {
 			r.Use(mW.RateLimiter(redisClient, mW.AuthGeneral))
 			r.Post("/auth", userService.RegisterNewUser)
+			r.Post("/auth/refresh", userService.RefreshToken)
 
-			r.Post("/account/send-bvn-otp", accountService.GenerateBVNOTP)
-			r.Post("/account/validate-bvn-otp", accountService.ValidateBVNOTP)
 			r.Post("/account/validate-identity", accountService.ValidateFacialIdentity)
 		})
 
@@ -272,7 +271,7 @@ func main() {
 
 			r.Put("/auth", userService.EditUserProfile)
 			r.Delete("/auth", userService.DeleteUserProfile)
-			r.Post("/auth/refresh", userService.RefreshToken)
+
 			r.Get("/auth/account", userService.GetUserAccount)
 			r.Post("/auth/logout", userService.LogoutUser)
 
@@ -287,8 +286,8 @@ func main() {
 			r.Get("/account/notifications", notificationService.GetUserNotifications)
 
 			// QR endpoints
-			r.Post("/account/qr", accountService.GenerateQR)
-			r.Get("/account/qr", accountService.ProcessQR)
+			r.Post("/account/qr", accountService.GenerateQRCode)
+			r.Get("/account/qr", accountService.ProcessQRCode)
 
 			r.Post("/account/ussd", accountService.GenerateUSSDCode)
 			r.Get("/account/ussd", accountService.ValidateUSSDCode)
@@ -307,6 +306,17 @@ func main() {
 			r.Post("/card/activate", cardService.ActivateCard)
 			r.Get("/card/{cardId}", cardService.GetCard)
 			r.Put("/card/{cardId}/suspend", cardService.SuspendCard)
+
+			// r.Get("/data-plans", )
+
+			//   const dataPlans = [
+			//     { id: "1", size: "1GB", validity: "1 Day", price: 300 },
+			//     { id: "2", size: "2GB", validity: "7 Days", price: 500 },
+			//     { id: "3", size: "5GB", validity: "30 Days", price: 1500 },
+			//     { id: "4", size: "10GB", validity: "30 Days", price: 2500 },
+			//     { id: "5", size: "20GB", validity: "30 Days", price: 4500 },
+			//     { id: "6", size: "50GB", validity: "30 Days", price: 10000 },
+			//   ];
 
 			// Voucher endpoints
 			r.Get("/vouchers", voucherService.FetchVouchers)

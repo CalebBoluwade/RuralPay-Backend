@@ -16,9 +16,10 @@ import (
 )
 
 type CardService struct {
-	db        *sql.DB
-	hsm       hsm.HSMInterface
-	validator *ValidationHelper
+	db          *sql.DB
+	hsm         hsm.HSMInterface
+	bankService *BankService
+	validator   *ValidationHelper
 }
 
 // ProvisionRequest represents card provisioning request
@@ -36,9 +37,10 @@ type ActivationRequest struct {
 
 func NewCardService(db *sql.DB, hsm hsm.HSMInterface) *CardService {
 	return &CardService{
-		db:        db,
-		hsm:       hsm,
-		validator: NewValidationHelper(),
+		db:          db,
+		hsm:         hsm,
+		bankService: NewBankService(),
+		validator:   NewValidationHelper(),
 	}
 }
 
@@ -52,7 +54,7 @@ func NewCardService(db *sql.DB, hsm hsm.HSMInterface) *CardService {
 // @Success 200 {object} object{cardId=string,status=string}
 // @Failure 400 {object} map[string]string
 // @Router /cards/provision [post]
-func (cps *CardService) ProvisionCard(w http.ResponseWriter, r *http.Request) {
+func (s *CardService) ProvisionCard(w http.ResponseWriter, r *http.Request) {
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 
@@ -70,7 +72,7 @@ func (cps *CardService) ProvisionCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := cps.validator.ValidateStruct(&req); err != nil {
+	if err := s.validator.ValidateStruct(&req); err != nil {
 		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
@@ -89,7 +91,7 @@ func (cps *CardService) ProvisionCard(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} object{cardId=string,status=string}
 // @Failure 400 {object} map[string]string
 // @Router /cards/activate [post]
-func (cps *CardService) ActivateCard(w http.ResponseWriter, r *http.Request) {
+func (s *CardService) ActivateCard(w http.ResponseWriter, r *http.Request) {
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
 
@@ -107,7 +109,7 @@ func (cps *CardService) ActivateCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := cps.validator.ValidateStruct(&req); err != nil {
+	if err := s.validator.ValidateStruct(&req); err != nil {
 		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
 		return
 	}
@@ -125,7 +127,7 @@ func (cps *CardService) ActivateCard(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} object{cardId=string,status=string,balance=float64}
 // @Failure 404 {object} map[string]string
 // @Router /cards/{cardId} [get]
-func (cps *CardService) GetCard(w http.ResponseWriter, r *http.Request) {
+func (s *CardService) GetCard(w http.ResponseWriter, r *http.Request) {
 	cardID := chi.URLParam(r, "cardId")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"cardId": cardID, "status": "active"})
@@ -140,7 +142,7 @@ func (cps *CardService) GetCard(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} object{cardId=string,status=string}
 // @Failure 404 {object} map[string]string
 // @Router /cards/{cardId}/suspend [put]
-func (cps *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
+func (s *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
 	cardID := chi.URLParam(r, "cardId")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"cardId": cardID, "status": "suspended"})
@@ -155,7 +157,7 @@ func (cps *CardService) SuspendCard(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
 // @Router /card/bin [get]
-func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
+func (s *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	bin := r.URL.Query().Get("bin")
 	if bin == "" {
 		utils.SendErrorResponse(w, "BIN is required", http.StatusBadRequest, nil)
@@ -179,6 +181,8 @@ func (cps *CardService) QueryCardBin(w http.ResponseWriter, r *http.Request) {
 	if len(lookupBin) > 6 {
 		lookupBin = lookupBin[:6]
 	}
+
+	// s.bankService.
 
 	// 1. Check local seed data
 	seedData := map[string]models.BINResponse{

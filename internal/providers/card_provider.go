@@ -187,21 +187,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		return nil, err
 	}
 
-	slog.Info("card.process.sealing_for_nibss", "tx_id", req.TransactionID)
-	sealedMsg, err := p.iso8583Service.SignAndSealPayload(isoMsg)
-	if err != nil {
-		slog.Error("card.process.sign_and_seal_failed", "tx_id", req.TransactionID, "error", err)
-		return &models.PaymentResponse{
-			Success:       false,
-			TransactionID: req.TransactionID,
-			Status:        "FAILED",
-			Message:       utils.ProcessingFailed.Response(),
-			PaymentMode:   models.PaymentModeCard,
-			Timestamp:     time.Now(),
-		}, err
-	}
-
-	resp, err := p.nibssClient.ProcessCardSettlement(ctx, sealedMsg)
+	resp, err := p.nibssClient.ProcessCardSettlement(ctx, isoMsg)
 	if err != nil {
 		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
 		p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)

@@ -107,14 +107,19 @@ func (s *HSMKeyService) getKeyTypeAndSize(keyID, publicKeyPEM string) (string, i
 // @Router /encryption/keys [put]
 func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	userId, _ := utils.ExtractUserMerchantInfoFromContext(w, ctx)
+	userIsAdmin, _ := utils.ExtractIsAdminFromContext(w, ctx)
+	if !userIsAdmin {
+		utils.SendErrorResponse(w, "Insufficient Privileges", http.StatusForbidden, nil)
+		return
+	}
 
-	slog.Info("create.key.pair.external", "user_id", userId)
+	slog.Info("create.key.pair.external")
 
 	_, err := s.hsm.GenerateAndSaveKeyPairExternal("app_signing")
 	if err != nil {
 		slog.ErrorContext(req.Context(), "failed to generate key pair external for app_signing: %v", err)
 		utils.SendErrorResponse(w, "Public Key Not Found", http.StatusNotFound, nil)
+		return
 	}
 
 	utils.SendSuccessResponse(w, "Key Generated Successfully", nil, http.StatusOK)
@@ -140,7 +145,7 @@ func (s *HSMKeyService) GetUserPublicKeys(w http.ResponseWriter, r *http.Request
 	// 2. Marshal the public key to PKIX (Required for WebCrypto/SPKI compatibility)
 	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
 	if err != nil {
-		utils.SendErrorResponse(w, "failed to marshal public key", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, "Failed to Generate Public Key", http.StatusBadRequest, nil)
 		return
 	}
 

@@ -13,7 +13,8 @@ const (
 	PaymentModeBankTransfer PaymentMode = "BANK_TRANSFER"
 	PaymentModeUSSD         PaymentMode = "USSD"
 	PaymentModeVoice        PaymentMode = "VOICE"
-	PaymentModeAirtimeData  PaymentMode = "AIRTIME_DATA"
+	PaymentModeAirtime      PaymentMode = "AIRTIME"
+	PaymentModeData         PaymentMode = "DATA"
 )
 
 const (
@@ -69,7 +70,6 @@ type Location struct {
 	Accuracy  float64 `json:"accuracy" db:"accuracy"`
 	Address   string  `json:"address" db:"address"`
 }
-
 
 type AirtimeDataRequest struct {
 	TransactionID string      `json:"transactionId"`

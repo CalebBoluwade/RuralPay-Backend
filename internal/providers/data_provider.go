@@ -17,23 +17,23 @@ import (
 	"github.com/ruralpay/backend/internal/utils"
 )
 
-type AirtimeDataProvider struct {
+type DataProvider struct {
 	*BasePaymentProvider
 	acctService *services.AccountService
 }
 
-func NewAirtimeDataProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSMInterface) *AirtimeDataProvider {
-	return &AirtimeDataProvider{
+func NewDataProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSMInterface) *DataProvider {
+	return &DataProvider{
 		BasePaymentProvider: NewBasePaymentProvider(db, redis, hsmInstance),
 		acctService:         services.NewAccountService(db, redis),
 	}
 }
 
-func (p *AirtimeDataProvider) GetPaymentMode() models.PaymentMode {
+func (p *DataProvider) GetPaymentMode() models.PaymentMode {
 	return models.PaymentModeAirtime
 }
 
-func (p *AirtimeDataProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
+func (p *DataProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
 	isValid2FA := p.acctService.ValidateUserOTP(req.UserID, req.OneTimeCode, "2FA-CODE")
 	if !isValid2FA {
 		slog.Warn("account.verify_otp.not_found_or_expired")
@@ -43,7 +43,7 @@ func (p *AirtimeDataProvider) ValidatePayment(ctx context.Context, req *models.P
 	return nil
 }
 
-func (p *AirtimeDataProvider) validateRequest(req *models.AirtimeDataRequest) error {
+func (p *DataProvider) validateRequest(req *models.AirtimeDataRequest) error {
 	if req.DebitAccount == "" {
 		return errors.New("fromAccount is required")
 	}
@@ -65,11 +65,11 @@ func (p *AirtimeDataProvider) validateRequest(req *models.AirtimeDataRequest) er
 	return nil
 }
 
-func (p *AirtimeDataProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
+func (p *DataProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
 	return nil, errors.New("use HandlePayment directly for airtime/data requests")
 }
 
-func (p *AirtimeDataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
+func (p *DataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	var req models.AirtimeDataRequest

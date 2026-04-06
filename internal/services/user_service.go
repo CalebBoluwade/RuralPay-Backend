@@ -272,7 +272,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	sessionID, err := generateSessionID(user.ID)
 	if err != nil {
 		slog.Error("auth.login.session_id_failed", "user_id", user.ID, "error", err)
-		utils.SendErrorResponse(w, "Failed To Generate Token", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusInternalServerError, nil)
 		return
 	}
 	deviceID := fmt.Sprintf("%s_%s_%s", req.DeviceInfo.Platform, req.DeviceInfo.Model, req.DeviceInfo.OSVersion)
@@ -280,14 +280,14 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	token, err := generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.login.jwt_failed", "user_id", user.ID, "error", err)
-		utils.SendErrorResponse(w, "Failed to generate token", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusFailedDependency, nil)
 		return
 	}
 
 	refreshToken, err := generateRefreshToken(user.ID, sessionID)
 	if err != nil {
 		slog.Error("auth.login.refresh_token_failed", "user_id", user.ID, "error", err)
-		utils.SendErrorResponse(w, "Failed to generate token", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -695,13 +695,13 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	newAccessToken, err := generateJWTWithSession(userID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.refresh.access_token_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusInternalServerError, nil)
 		return
 	}
 	newRefreshToken, err := generateRefreshToken(userID, sessionID)
 	if err != nil {
 		slog.Error("auth.refresh.refresh_token_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to generate token", http.StatusInternalServerError, nil)
+		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusInternalServerError, nil)
 		return
 	}
 
@@ -923,24 +923,51 @@ func (s *UserService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("auth.reset_password.success", "user_id", userID)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"message": "Password Reset successful", "success": true})
+	utils.SendSuccessResponse(w, "Password Reset Successful", nil, http.StatusOK)
 }
 
-func (s *UserService) CheckUserStatus(userID string) (bool, error) {
+// CheckUserStatusAndPrivileges checks both user status and admin privileges in a single query
+func (s *UserService) CheckUserStatusAndPrivileges(userID string) (isActive, isAdmin bool, err error) {
+	slog.Debug("user.check_status_privileges", "user_id", userID)
 	var status string
-	var deletedAt sql.NullTime
-	err := s.db.QueryRow(
-		`SELECT status, deleted_at FROM users WHERE id = $1`, userID,
-	).Scan(&status, &deletedAt)
+	var adminFlag sql.NullBool
+
+	err = s.db.QueryRow(`
+	SELECT 
+		u.status, 
+		(a.user_id IS NOT NULL) AS is_admin
+	FROM users u
+	LEFT JOIN admins a 
+		ON u.id = a.user_id
+	WHERE u.id = $1
+	`, userID).Scan(&status, &adminFlag)
+
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+			return false, false, nil
 		}
-		return false, err
+
+		slog.Error("user.check_status_privileges.error", "user_id", userID, "error", err)
+		return false, false, err
 	}
-	return status == "active" && !deletedAt.Valid, nil
+
+	isActive = status == "active"
+	isAdmin = adminFlag.Valid && adminFlag.Bool
+
+	slog.Debug("user.status_privileges_result", "user_id", userID, "is_active", isActive, "is_admin", isAdmin)
+	return isActive, isAdmin, nil
+}
+
+// Deprecated: Use CheckUserStatusAndPrivileges instead
+func (s *UserService) CheckUserStatus(userID string) (bool, error) {
+	active, _, err := s.CheckUserStatusAndPrivileges(userID)
+	return active, err
+}
+
+// Deprecated: Use CheckUserStatusAndPrivileges instead
+func (s *UserService) CheckUserIsAdmin(userID string) (bool, error) {
+	_, isAdmin, err := s.CheckUserStatusAndPrivileges(userID)
+	return isAdmin, err
 }
 
 func (s *UserService) UserFeedback(w http.ResponseWriter, r *http.Request) {

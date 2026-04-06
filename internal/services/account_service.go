@@ -517,7 +517,7 @@ func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request
 // @Accept json
 // @Produce json
 // @Param request body object{action=string,channel=string} true "OTP generation request"
-// @Success 200 {object} map[string]interface{} "OTP generated successfully"
+// @Success 200 {object} models.APISuccessResponse "OTP generated successfully"
 // @Failure 400 {string} string "Invalid request"
 // @Failure 401 {string} string "Unauthorized"
 // @Security BearerAuth
@@ -603,141 +603,7 @@ func (s *AccountService) ValidateUserOTP(userId, userOTP, Action string) bool {
 	return true
 }
 
-// GenerateBVNOTP generates the OTP for BVN validation
-// @Summary Generate BVN OTP
-// @Description Generates OTP for BVN validation
-// @Tags Accounts
-// @Accept json
-// @Produce json
-// @Param request body object{bvn=string,phoneNumber=string,email=string} true "BVN OTP request"
-// @Success 200 {object} map[string]interface{} "OTP generated successfully"
-// @Failure 400 {string} string "Invalid request"
-// @Failure 401 {string} string "Unauthorized"
-// @Router /account/send-bvn-otp [post]
-func (s *AccountService) GenerateBVNOTP(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.GenerateBVNOTP.start")
-	var req struct {
-		BVN         string `json:"bvn" validate:"required,len=11"`
-		PhoneNumber string `json:"phoneNumber" validate:"required"`
-		Email       string `json:"email" validate:"required,email"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("account.GenerateBVNOTP.decode_error", "error", err)
-		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
-		return
-	}
-
-	if err := s.validator.Struct(&req); err != nil {
-		slog.Error("account.GenerateBVNOTP.validation_error", "error", err)
-		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
-		return
-	}
-
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
-
-	bvnData, err := s.nibssClient.VerifyBVN(r.Context(), req.BVN, req.PhoneNumber)
-	if err != nil {
-		slog.Error("account.generate_bvn_otp.nibss_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "BVN verification failed", http.StatusBadGateway, nil)
-		return
-	}
-	if !bvnData.PhoneMatches {
-		slog.Warn("account.generate_bvn_otp.phone_mismatch", "user_id", userID)
-		utils.SendErrorResponse(w, "Phone number does not match BVN records", http.StatusUnauthorized, nil)
-		return
-	}
-
-	key := fmt.Sprintf("%s:BVN_OTP:%d", req.BVN, userID)
-	otp := utils.GenerateOTP()
-
-	if s.redis != nil {
-		ctx := context.Background()
-		if err := s.redis.Set(ctx, key, otp, 10*time.Minute).Err(); err != nil {
-			slog.Error("account.generate_otp.store_failed", "error", err)
-			utils.SendErrorResponse(w, utils.OTPGenerationError, http.StatusFailedDependency, nil)
-			return
-		}
-	}
-
-	// Send OTP via notification
-	if s.notificationSVC != nil {
-		go s.notificationSVC.SendOTPEmail(req.Email, otp, "10 minutes", models.ValidateAccount)
-		go s.notificationSVC.SendOTPSmS(req.PhoneNumber, otp, "10 minutes", models.ValidateAccount)
-		slog.Info("auth.forgot_password.otp_sent", "user_id", userID)
-	}
-
-	slog.Info("account.generate_otp.success", "user_id", userID)
-	utils.SendSuccessResponse(w, "", "OTP Generated", http.StatusOK)
-}
-
-// ValidateBVNOTP verifies the OTP for BVN validation
-// @Summary Validate BVN OTP
-// @Description Verify OTP sent for BVN validation
-// @Tags Accounts
-// @Accept json
-// @Produce json
-// @Param request body object{bvn=string,otp=string} true "OTP verification request"
-// @Success 200 {object} map[string]interface{} "OTP verified successfully"
-// @Failure 400 {string} string "Invalid request"
-// @Failure 401 {string} string "Invalid or expired OTP"
-// @Router /account/validate-bvn-otp [post]
-func (s *AccountService) ValidateBVNOTP(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.ValidateBVNOTP.start")
-	var req struct {
-		BVN string `json:"bvn" validate:"required,len=11"`
-		OTP string `json:"otp" validate:"required,len=8"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("account.ValidateBVNOTP.decode_error", "error", err)
-		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
-		return
-	}
-
-	if err := s.validator.Struct(&req); err != nil {
-		slog.Error("account.ValidateBVNOTP.validation_error", "error", err)
-		utils.SendErrorResponse(w, utils.ValidationError, http.StatusBadRequest, err)
-		return
-	}
-
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
-	key := fmt.Sprintf("%s:BVN_OTP:%d", req.BVN, userID)
-
-	if s.redis != nil {
-		ctx := context.Background()
-		storedOTP, err := s.redis.Get(ctx, key).Result()
-		if err != nil {
-			slog.Warn("account.verify.bvn_otp.not_found_or_expired")
-			utils.SendErrorResponse(w, utils.OTPError, http.StatusUnauthorized, nil)
-			return
-		}
-
-		if storedOTP != req.OTP {
-			slog.Warn("account.verify.bvn_otp.invalid")
-			utils.SendErrorResponse(w, utils.OTPError, http.StatusUnauthorized, nil)
-			return
-		}
-
-		s.redis.Del(ctx, key)
-	}
-
-	if _, err := s.db.Exec(`
-		INSERT INTO user_limits (user_id, kyc_status, kyc_level, kyc_verified_at, updated_at)
-		VALUES ($1, 'VERIFIED', 1, NOW(), NOW())
-		ON CONFLICT (user_id) DO UPDATE
-		SET kyc_status = 'VERIFIED', kyc_level = 1, kyc_verified_at = NOW(), updated_at = NOW()
-	`, userID); err != nil {
-		slog.Error("account.verify.bvn_otp.kyc_persist_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to update KYC status", http.StatusFailedDependency, nil)
-		return
-	}
-
-	slog.Info("account.verify.bvn_otp.success", "user_id", userID)
-	utils.SendSuccessResponse(w, "", "BVN Verified", http.StatusOK)
-}
-
-// GenerateQR generates a QR Code
+// GenerateQRCode generates a QR Code
 // @Summary Generate QR Code
 // @Description Generate a QR code for payment
 // @Tags QR
@@ -749,7 +615,7 @@ func (s *AccountService) ValidateBVNOTP(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} utils.APIErrorResponse
 // @Failure 401 {object} utils.APIErrorResponse
 // @Router /account/qr [post]
-func (s *AccountService) GenerateQR(w http.ResponseWriter, r *http.Request) {
+func (s *AccountService) GenerateQRCode(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.generate.qr.start")
 	userID, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 	if merchantID == 0 {
@@ -791,7 +657,7 @@ func (s *AccountService) GenerateQR(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
-// ProcessQR processes a scanned QR code
+// ProcessQRCode processes a scanned QR code
 // @Summary Process QR Code
 // @Description Process a scanned QR code data
 // @Tags QR
@@ -801,7 +667,7 @@ func (s *AccountService) GenerateQR(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} object{userId=string,amount=int64}
 // @Failure 400 {object} utils.APIErrorResponse
 // @Router /account/qr [get]
-func (s *AccountService) ProcessQR(w http.ResponseWriter, r *http.Request) {
+func (s *AccountService) ProcessQRCode(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.ProcessQR.start")
 	qrData := r.URL.Query().Get("token")
 	if qrData == "" {
@@ -1018,6 +884,17 @@ func (s *AccountService) fetchUserForNotification(id int) *models.User {
 	return user
 }
 
+// ValidateFacialIdentity Validates the user's facial identity
+// @Summary Validate Facial Identity
+// @Description Validates the user's facial identity
+// @Tags Accounts
+// @Accept json
+// @Produce json
+// @Param request body object{bvn=string,userSelfie=string} true "OTP verification request"
+// @Success 200 {object} models.APISuccessResponse "Validated Successfully"
+// @Failure 400 {string} string "Invalid Request"
+// @Failure 403 {string} string "User's Face Does Not Match Our Records"
+// @Router /account/validate-identity [post]
 func (s *AccountService) ValidateFacialIdentity(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.face.identity.verification.start")
 

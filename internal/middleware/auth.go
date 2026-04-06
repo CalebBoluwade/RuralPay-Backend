@@ -134,11 +134,12 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		active, err := userService.CheckUserStatus(userID)
+		active, isAdmin, err := userService.CheckUserStatusAndPrivileges(userID)
 		if err != nil {
 			validator.SendErrorResponse(w, "Invalid User Status", http.StatusUnauthorized, nil)
 			return
 		}
+
 		if !active {
 			validator.SendErrorResponse(w, "User Is Not Active", http.StatusUnauthorized, nil)
 			return
@@ -148,6 +149,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 		if merchantID != nil {
 			ctx = context.WithValue(ctx, "merchantID", fmt.Sprintf("%v", merchantID))
 		}
+		ctx = context.WithValue(ctx, "isAdmin", fmt.Sprintf("%v", isAdmin))
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
