@@ -17,6 +17,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ruralpay/backend/internal/constants"
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
@@ -299,7 +300,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		}
 		sessionData, _ := json.Marshal(session)
 		ctx := context.Background()
-		err := s.redis.Set(ctx, utils.SessionKeyPrefix+sessionID, sessionData, time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Err()
+		err := s.redis.Set(ctx, constants.SessionKeyPrefix+sessionID, sessionData, time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Err()
 		if err != nil {
 			slog.Error("auth.login.session_store_failed", "error", err)
 		} else {
@@ -343,7 +344,7 @@ func (s *UserService) LogoutUser(w http.ResponseWriter, r *http.Request) {
 
 		if sid, ok := claims["sid"].(string); ok {
 			// Delete session — invalidates all tokens bound to this session.
-			s.redis.Del(ctx, utils.SessionKeyPrefix+sid)
+			s.redis.Del(ctx, constants.SessionKeyPrefix+sid)
 		}
 
 		// Blacklist the access token for its remaining lifetime so in-flight
@@ -358,7 +359,7 @@ func (s *UserService) LogoutUser(w http.ResponseWriter, r *http.Request) {
 // remaining validity window. Uses the same key prefix as checkTokenBlacklist
 // in auth middleware.
 func (s *UserService) blacklistToken(ctx context.Context, token string, ttl time.Duration) {
-	key := utils.BlacklistKeyPrefix + token
+	key := constants.BlacklistKeyPrefix + token
 	if err := s.redis.Set(ctx, key, "1", ttl).Err(); err != nil {
 		slog.Error("auth.blacklist_token.failed", "error", err)
 	}
@@ -391,7 +392,7 @@ func (s *UserService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	utils.SendSuccessResponse(w, "", user, http.StatusOK)
+	utils.SendSuccessResponse(w, "User Account Details", user, http.StatusOK)
 }
 
 // EditUserProfile Edit user account details
@@ -518,7 +519,7 @@ func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) 
 		for {
 			keys, next, err := s.redis.Scan(
 				ctx, cursor,
-				fmt.Sprintf("%s%d_*", utils.SessionKeyPrefix, userID),
+				fmt.Sprintf("%s%d_*", constants.SessionKeyPrefix, userID),
 				100,
 			).Result()
 			if err != nil {
@@ -645,7 +646,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	// Verify session exists
 	if s.redis != nil {
 		ctx := context.Background()
-		exists, _ := s.redis.Exists(ctx, utils.SessionKeyPrefix+sessionID).Result()
+		exists, _ := s.redis.Exists(ctx, constants.SessionKeyPrefix+sessionID).Result()
 		if exists == 0 {
 			utils.SendErrorResponse(w, "Session Expired", http.StatusUnauthorized, nil)
 			return
@@ -674,7 +675,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	var sessionData map[string]string
 	if s.redis != nil {
 		ctx := context.Background()
-		data, _ := s.redis.Get(ctx, utils.SessionKeyPrefix+sessionID).Result()
+		data, _ := s.redis.Get(ctx, constants.SessionKeyPrefix+sessionID).Result()
 		json.Unmarshal([]byte(data), &sessionData)
 	}
 	deviceID := sessionData["device_id"]
@@ -800,7 +801,7 @@ func (s *UserService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	err = s.db.QueryRow("SELECT email, phone_number FROM users WHERE id = $1", userID).Scan(&user.Email, &user.PhoneNumber)
 	if err != nil {
 		slog.Error("auth.forgot_password.fetch_failed", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to process request", http.StatusFailedDependency, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -816,7 +817,7 @@ func (s *UserService) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		} else {
 			if err = s.redis.Set(ctx, redisKey, otp, 30*time.Minute).Err(); err != nil {
 				slog.Error("auth.forgot_password.otp_store_failed", "error", err)
-				utils.SendErrorResponse(w, "Failed to process request", http.StatusFailedDependency, nil)
+				utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusFailedDependency, nil)
 				return
 			}
 			slog.Info("auth.forgot_password.otp_stored", "user_id", userID)

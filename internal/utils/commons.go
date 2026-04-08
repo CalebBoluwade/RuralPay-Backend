@@ -11,9 +11,6 @@ import (
 	"time"
 )
 
-var SessionKeyPrefix = "SESSION:"
-var BlacklistKeyPrefix = "BLACKLIST:"
-
 func ExtractUserMerchantInfoFromContext(w http.ResponseWriter, ctx context.Context) (int, int) {
 	userIDStr, ok := ctx.Value("userID").(string)
 	if !ok || userIDStr == "" {

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	mail "github.com/go-mail/mail/v2"
-	go_expo "github.com/montovaneli/go-expo-notification"
+	goExpo "github.com/montovaneli/go-expo-notification"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
 	"github.com/spf13/viper"
@@ -62,7 +62,7 @@ func NewNotificationService(db *sql.DB) *NotificationService {
 // @Failure 401 {object} utils.APIErrorResponse
 // @Security BearerAuth
 // @Router /account/notifications [get]
-func (s *NotificationService) GetUserNotifications(w http.ResponseWriter, r *http.Request) {
+func (ns *NotificationService) GetUserNotifications(w http.ResponseWriter, r *http.Request) {
 	slog.Info("get.user.notifications.start")
 	ctx := r.Context()
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
@@ -75,7 +75,7 @@ func (s *NotificationService) GetUserNotifications(w http.ResponseWriter, r *htt
         LIMIT 50
     `
 
-	rows, err := s.db.QueryContext(ctx, query, userID)
+	rows, err := ns.db.QueryContext(ctx, query, userID)
 	if err != nil {
 		slog.Error("get.user.notifications.query_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, "Failed to fetch user notifications", http.StatusFailedDependency, nil)
@@ -138,11 +138,11 @@ func (ns *NotificationService) Route(payload *models.NotificationPayload) error 
 
 func (ns *NotificationService) sendPush(payload *models.NotificationPayload) error {
 	// 1. Create a new Expo Push Client
-	p := go_expo.NewPushClient(nil)
+	client := goExpo.NewPushClient(nil)
 
 	// 2. Define the recipient
-	m := &go_expo.PushMessage{
-		To:       []go_expo.ExponentPushToken{go_expo.ExponentPushToken(payload.ExpoPushToken)},
+	m := &goExpo.PushMessage{
+		To:       []goExpo.ExponentPushToken{goExpo.ExponentPushToken(payload.ExpoPushToken)},
 		Title:    payload.Title,
 		Body:     payload.Body,
 		Data:     payload.Data,
@@ -150,7 +150,7 @@ func (ns *NotificationService) sendPush(payload *models.NotificationPayload) err
 		Priority: "default",
 	}
 
-	_, err := p.Publish(m)
+	_, err := client.Publish(m)
 	if err != nil {
 		slog.Error("notification.push.failed", "user_id", payload.UserID, "error", err)
 		return err
@@ -405,7 +405,7 @@ func (ns *NotificationService) buildPaymentPayload(transaction *models.Transacti
 			"transactionId":       transaction.TransactionID,
 			"amount":              fmt.Sprintf("%.2f", float64(transaction.Amount)),
 			"currency":            transaction.Currency,
-			"status":              transaction.Status,
+			"status":              string(transaction.Status),
 			"statusClass":         statusClass[notifType],
 			"senderFirstName":     user.FirstName,
 			"beneficiaryName":     fmt.Sprintf("%v", transaction.Metadata["beneficiaryName"]),

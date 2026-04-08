@@ -63,90 +63,90 @@ func (s *ISO8583Service) BuildISO8583Message(cardReq *models.CardPaymentRequest)
 	}
 
 	_ = msg.Field(2, pan)
-	slog.Info("ISO8583.build.field", "field", 2, "name", "PAN", "value", utils.MaskPAN(pan))
+	slog.Debug("ISO8583.build.field", "field", 2, "name", "PAN", "value", utils.MaskPAN(pan))
 
 	procCode := processingCode(cardReq.TxType)
 	_ = msg.Field(3, procCode)
-	slog.Info("ISO8583.build.field", "field", 3, "name", "Processing Code", "value", procCode)
+	slog.Debug("ISO8583.build.field", "field", 3, "name", "Processing Code", "value", procCode)
 
 	amountStr := fmt.Sprintf("%012d", cardReq.Amount)
 	_ = msg.Field(4, amountStr)
-	slog.Info("ISO8583.build.field", "field", 4, "name", "Amount", "value_", amountStr)
+	slog.Debug("ISO8583.build.field", "field", 4, "name", "Amount", "value_", amountStr)
 
 	stan := fmt.Sprintf("%06d", cardReq.CardInfo.ATC)
 	_ = msg.Field(11, stan)
-	slog.Info("ISO8583.build.field", "field", 11, "name", "STAN", "value", stan)
+	slog.Debug("ISO8583.build.field", "field", 11, "name", "STAN", "value", stan)
 
 	// Field 12: Local Transaction Time (HHMMSS)
 	localTime := fmt.Sprintf("%06d", cardReq.TransactionDate%1000000)
 	_ = msg.Field(12, localTime)
-	slog.Info("ISO8583.build.field", "field", 12, "name", "Local Transaction Time", "value", localTime)
+	slog.Debug("ISO8583.build.field", "field", 12, "name", "Local Transaction Time", "value", localTime)
 
 	// Field 13: Local Transaction Date (MMDD)
 	localDate := fmt.Sprintf("%04d", (cardReq.TransactionDate/1000000)%10000)
 	_ = msg.Field(13, localDate)
-	slog.Info("ISO8583.build.field", "field", 13, "name", "Local Transaction Date", "value", localDate)
+	slog.Debug("ISO8583.build.field", "field", 13, "name", "Local Transaction Date", "value", localDate)
 
 	// Field 14: Expiration Date (YYMM)
 	_ = msg.Field(14, expiryToYYMM(cardReq.CardInfo.ExpiryDate))
-	slog.Info("ISO8583.build.field", "field", 14, "name", "Expiration Date", "value", expiryToYYMM(cardReq.CardInfo.ExpiryDate))
+	slog.Debug("ISO8583.build.field", "field", 14, "name", "Expiration Date", "value", expiryToYYMM(cardReq.CardInfo.ExpiryDate))
 
 	// Field 15: Settlement Date (MMDD) — same as local date
 	_ = msg.Field(15, localDate)
-	slog.Info("ISO8583.build.field", "field", 15, "name", "Settlement Date", "value", localDate)
+	slog.Debug("ISO8583.build.field", "field", 15, "name", "Settlement Date", "value", localDate)
 
 	// Field 18: Merchant Category Code
 	_ = msg.Field(18, "5011")
-	slog.Info("ISO8583.build.field", "field", 18, "name", "MCC", "value", "5011")
+	slog.Debug("ISO8583.build.field", "field", 18, "name", "MCC", "value", "5011")
 
 	// Field 22: POS Entry Mode — 051 = chip read, PIN not required
 	_ = msg.Field(22, "051")
-	slog.Info("ISO8583.build.field", "field", 22, "name", "POS Entry Mode", "value", "051")
+	slog.Debug("ISO8583.build.field", "field", 22, "name", "POS Entry Mode", "value", "051")
 
 	// Field 25: POS Condition Code
 	_ = msg.Field(25, "00")
-	slog.Info("ISO8583.build.field", "field", 25, "name", "POS Condition Code", "value", "00")
+	slog.Debug("ISO8583.build.field", "field", 25, "name", "POS Condition Code", "value", "00")
 
 	// Field 26: POS PIN Capture Code
 	_ = msg.Field(26, "04")
-	slog.Info("ISO8583.build.field", "field", 26, "name", "POS PIN Capture Code", "value", "04")
+	slog.Debug("ISO8583.build.field", "field", 26, "name", "POS PIN Capture Code", "value", "04")
 
 	// Field 28: Transaction Fee Amount — D=debit, 8 digit zero-padded
 	_ = msg.Field(28, "D00000000")
-	slog.Info("ISO8583.build.field", "field", 28, "name", "Transaction Fee Amount", "value", "D00000000")
+	slog.Debug("ISO8583.build.field", "field", 28, "name", "Transaction Fee Amount", "value", "D00000000")
 
 	// Fields 32 & 33: Acquiring / Forwarding Institution ID
 	acquiringID := viper.GetString("iso8583.acquiring_institution_id")
 	forwardingID := viper.GetString("iso8583.forwarding_institution_id")
 	_ = msg.Field(32, acquiringID)
-	slog.Info("ISO8583.build.field", "field", 32, "name", "Acquiring Institution ID", "value", acquiringID)
+	slog.Debug("ISO8583.build.field", "field", 32, "name", "Acquiring Institution ID", "value", acquiringID)
 	_ = msg.Field(33, forwardingID)
-	slog.Info("ISO8583.build.field", "field", 33, "name", "Forwarding Institution ID", "value", forwardingID)
+	slog.Debug("ISO8583.build.field", "field", 33, "name", "Forwarding Institution ID", "value", forwardingID)
 
 	// Field 35: Track 2 Data — PAN=YYMM (service code omitted for chip)
 	track2 := fmt.Sprintf("%s=%s", pan, expiryToYYMM(cardReq.CardInfo.ExpiryDate))
 	_ = msg.Field(35, track2)
-	slog.Info("ISO8583.build.field", "field", 35, "name", "Track 2 Data", "value", utils.MaskPAN(track2))
+	slog.Debug("ISO8583.build.field", "field", 35, "name", "Track 2 Data", "value", utils.MaskPAN(track2))
 
 	// Field 37: Retrieval Reference Number — MMDDHHNNNNNN (4+2+6 = 12 chars)
 	rrn := fmt.Sprintf("%s%s%06d", localDate, localTime[:2], cardReq.CardInfo.ATC)
 	_ = msg.Field(37, rrn)
-	slog.Info("ISO8583.build.field", "field", 37, "name", "RRN", "value", rrn)
+	slog.Debug("ISO8583.build.field", "field", 37, "name", "RRN", "value", rrn)
 
 	// Field 40: Network Management Information Code
 	_ = msg.Field(40, "601")
-	slog.Info("ISO8583.build.field", "field", 40, "name", "Network Mgmt Info Code", "value", "601")
+	slog.Debug("ISO8583.build.field", "field", 40, "name", "Network Mgmt Info Code", "value", "601")
 
 	// Fields 41, 42, 43: Terminal / Merchant identifiers from config
 	terminalID := viper.GetString("iso8583.terminal_id")
 	cardAcceptorID := viper.GetString("iso8583.card_acceptor_id")
 	cardAcceptorName := fmt.Sprintf("%-40s", viper.GetString("iso8583.card_acceptor_name"))
 	_ = msg.Field(41, terminalID)
-	slog.Info("ISO8583.build.field", "field", 41, "name", "Terminal ID", "value", terminalID)
+	slog.Debug("ISO8583.build.field", "field", 41, "name", "Terminal ID", "value", terminalID)
 	_ = msg.Field(42, cardAcceptorID)
-	slog.Info("ISO8583.build.field", "field", 42, "name", "Card Acceptor ID", "value", cardAcceptorID)
+	slog.Debug("ISO8583.build.field", "field", 42, "name", "Card Acceptor ID", "value", cardAcceptorID)
 	_ = msg.Field(43, cardAcceptorName)
-	slog.Info("ISO8583.build.field", "field", 43, "name", "Card Acceptor Name", "value", cardAcceptorName)
+	slog.Debug("ISO8583.build.field", "field", 43, "name", "Card Acceptor Name", "value", cardAcceptorName)
 
 	if cardReq.CardInfo.IssuerAppData != "" {
 		iccBytes, err := hex.DecodeString(cardReq.CardInfo.IssuerAppData)
@@ -155,8 +155,10 @@ func (s *ISO8583Service) BuildISO8583Message(cardReq *models.CardPaymentRequest)
 			return nil, fmt.Errorf("invalid ICC data: %w", err)
 		}
 		_ = msg.Field(55, string(iccBytes))
-		slog.Info("ISO8583.build.field", "field", 55, "name", "ICC Data", "bytes", len(iccBytes))
+		slog.Debug("ISO8583.build.field", "field", 55, "name", "ICC Data", "bytes", len(iccBytes))
 	}
+
+	_ = msg.Field(128, "088ecae48e4f2acef0c33aeb531a37534f0e58d6eac66d793e38ea2415fa3e12")
 
 	packed, err := msg.Pack()
 	if err != nil {

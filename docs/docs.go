@@ -395,64 +395,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/account/send-bvn-otp": {
-            "post": {
-                "description": "Generates OTP for BVN validation",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Accounts"
-                ],
-                "summary": "Generate BVN OTP",
-                "parameters": [
-                    {
-                        "description": "BVN OTP request",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "bvn": {
-                                    "type": "string"
-                                },
-                                "email": {
-                                    "type": "string"
-                                },
-                                "phoneNumber": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OTP generated successfully",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/account/send-otp": {
             "post": {
                 "security": [
@@ -494,8 +436,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OTP generated successfully",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/utils.APISuccessResponse"
                         }
                     },
                     "400": {
@@ -628,9 +569,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/account/validate-bvn-otp": {
+        "/account/validate-identity": {
             "post": {
-                "description": "Verify OTP sent for BVN validation",
+                "description": "Validates the user's facial identity",
                 "consumes": [
                     "application/json"
                 ],
@@ -640,7 +581,7 @@ const docTemplate = `{
                 "tags": [
                     "Accounts"
                 ],
-                "summary": "Validate BVN OTP",
+                "summary": "Validate Facial Identity",
                 "parameters": [
                     {
                         "description": "OTP verification request",
@@ -653,7 +594,7 @@ const docTemplate = `{
                                 "bvn": {
                                     "type": "string"
                                 },
-                                "otp": {
+                                "userSelfie": {
                                     "type": "string"
                                 }
                             }
@@ -662,20 +603,19 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "OTP verified successfully",
+                        "description": "Validated Successfully",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": true
+                            "$ref": "#/definitions/utils.APISuccessResponse"
                         }
                     },
                     "400": {
-                        "description": "Invalid request",
+                        "description": "Invalid Request",
                         "schema": {
                             "type": "string"
                         }
                     },
-                    "401": {
-                        "description": "Invalid or expired OTP",
+                    "403": {
+                        "description": "User's Face Does Not Match Our Records",
                         "schema": {
                             "type": "string"
                         }
@@ -832,6 +772,29 @@ const docTemplate = `{
                             "type": "object",
                             "additionalProperties": {
                                 "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/data-plans": {
+            "get": {
+                "description": "Get a list of available data plans",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Data Plans"
+                ],
+                "summary": "Get data plans",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/models.DataPlan"
                             }
                         }
                     }
@@ -2604,6 +2567,23 @@ const docTemplate = `{
                 }
             }
         },
+        "models.DataPlan": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "price": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "string"
+                },
+                "validity": {
+                    "type": "string"
+                }
+            }
+        },
         "models.DeviceInfo": {
             "description": "Device information structure",
             "type": "object",
@@ -2756,7 +2736,8 @@ const docTemplate = `{
                 "BANK_TRANSFER",
                 "USSD",
                 "VOICE",
-                "AIRTIME_DATA"
+                "AIRTIME",
+                "DATA"
             ],
             "x-enum-varnames": [
                 "PaymentModeCard",
@@ -2764,14 +2745,16 @@ const docTemplate = `{
                 "PaymentModeBankTransfer",
                 "PaymentModeUSSD",
                 "PaymentModeVoice",
-                "PaymentModeAirtimeData"
+                "PaymentModeAirtime",
+                "PaymentModeData"
             ]
         },
         "models.PaymentRequest": {
             "type": "object",
             "required": [
                 "oneTimeCode",
-                "transactionId"
+                "transactionId",
+                "twoFAType"
             ],
             "properties": {
                 "amount": {
@@ -2816,6 +2799,12 @@ const docTemplate = `{
                 "transactionId": {
                     "type": "string"
                 },
+                "twoFAType": {
+                    "type": "string",
+                    "enum": [
+                        "BYPASS"
+                    ]
+                },
                 "txType": {
                     "$ref": "#/definitions/models.PaymentType"
                 },
@@ -2828,7 +2817,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "message": {
-                    "type": "string"
+                    "$ref": "#/definitions/utils.ResponseMessage"
                 },
                 "metadata": {
                     "$ref": "#/definitions/models.Metadata"
@@ -2840,7 +2829,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
-                    "type": "string"
+                    "$ref": "#/definitions/models.TransactionStatus"
                 },
                 "success": {
                     "type": "boolean"
@@ -2984,7 +2973,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "status": {
-                    "type": "string"
+                    "$ref": "#/definitions/models.TransactionStatus"
                 },
                 "sync_status": {
                     "type": "string"
@@ -3008,6 +2997,25 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "models.TransactionStatus": {
+            "type": "string",
+            "enum": [
+                "PENDING",
+                "COMPLETED",
+                "FAILED",
+                "Cancelled",
+                "FAILED_SETTLEMENT",
+                "FAILED_ISO_CONVERSION"
+            ],
+            "x-enum-varnames": [
+                "TransactionStatusPending",
+                "TransactionStatusSuccess",
+                "TransactionStatusFailed",
+                "TransactionStatusCancelled",
+                "TransactionSettlementFailed",
+                "TransactionStatusISOCONVFailed"
+            ]
         },
         "models.USSDCodeType": {
             "type": "string",
@@ -3370,6 +3378,69 @@ const docTemplate = `{
                     "type": "boolean"
                 }
             }
+        },
+        "utils.ResponseMessage": {
+            "type": "string",
+            "enum": [
+                "Invalid Credentials",
+                "Account Not Found",
+                "User Not Found",
+                "Failed to Generate Token",
+                "Invalid or Expired Reset Token",
+                "Invalid or Expired OTP",
+                "Failed to Reset Password",
+                "Validation Failed",
+                "Multi Factor Validation Failed",
+                "Invalid Request Body",
+                "Unauthorized User Access",
+                "Request Body Must Only Contain a Single JSON Object",
+                "Failed to Fetch Transaction",
+                "Single Transaction Limit Cannot Exceed Daily Limit",
+                "Payment Processing Failed",
+                "Invalid Payment Mode",
+                "Unable to Process Request at this time",
+                "Failed to Generate OTP",
+                "Internal Service Error",
+                "User Created Successfully",
+                "Account Found Successfully",
+                "Login Successful",
+                "Password Reset Link Sent to your Email Address",
+                "OTP Sent to your Email Address",
+                "Password Reset Successful",
+                "Transaction Data Fetched Successfully",
+                "Payment Initiated Successfully",
+                "Payment Successful"
+            ],
+            "x-enum-varnames": [
+                "InvalidCreds",
+                "AccountNotFoundError",
+                "UserNotFoundError",
+                "GenerateTokenError",
+                "TokenError",
+                "OTPError",
+                "PasswordResetError",
+                "ValidationError",
+                "MultiFactorAuthError",
+                "InvalidRequestError",
+                "UnauthorizedError",
+                "SingleObjectError",
+                "FetchTransaction",
+                "SingleLimitError",
+                "PaymentFailed",
+                "InvalidPaymentMode",
+                "ProcessingFailed",
+                "OTPGenerationError",
+                "InternalServiceError",
+                "UserCreated",
+                "AccountFound",
+                "LoginSuccess",
+                "ResetLinkSent",
+                "OTPSent",
+                "PasswordResetSuccess",
+                "TransactionFetched",
+                "PaymentInitiated",
+                "PaymentSuccessful"
+            ]
         }
     }
 }`

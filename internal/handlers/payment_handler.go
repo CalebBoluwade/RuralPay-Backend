@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -45,15 +46,20 @@ func NewPaymentHandler(db *sql.DB, redisClient *redis.Client, hsm hsm.HSMInterfa
 	}
 }
 
-func (h *PaymentHandler) checkIdempotency(txID string) (string, bool) {
-	if h.redis == nil {
+func (h *PaymentHandler) checkIdempotency(ctx context.Context, txID string) (models.TransactionStatus, bool) {
+	key := fmt.Sprintf("idempotency:%s", txID)
+
+	val, err := h.redis.Get(ctx, key).Result()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			// Log real errors so you know if Redis is failing
+			slog.Error("Redis error checking idempotency for %s: %v", txID, err)
+		}
 		return "", false
 	}
-	status, err := h.redis.Get(context.Background(), fmt.Sprintf("idempotency:%s", txID)).Result()
-	if err == nil {
-		return status, true
-	}
-	return "", false
+
+	// Cast the string result to your custom Status type
+	return models.TransactionStatus(val), true
 }
 
 // HandlePayment processes a payment request by routing to the appropriate provider
@@ -71,8 +77,6 @@ func (h *PaymentHandler) checkIdempotency(txID string) (string, bool) {
 // @Router /payment [post]
 // @Security BearerAuth
 func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
-	slog.Debug("[PaymentHandler] Incoming Request", "[Method]", r.Method, "[Path]", r.URL.Path, "[SourceIP]", r.RemoteAddr)
-
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -80,18 +84,19 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
-	slog.Debug("[PaymentHandler] Request Body Received: %s", "request_body", string(body))
+	slog.Debug("[PaymentHandler] Request Body Received", "[RequestBody]", string(body))
 
 	var req models.PaymentRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		slog.Error("[PaymentHandler] Error Unmarshalling Request Body: %v, body: %s", "err", err, "request_body", string(body))
+		slog.Error("[PaymentHandler] Error Unmarshalling Request Body: %v, body: %s", "err", err, "[RequestBody]", string(body))
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
-	slog.Debug("[PaymentHandler] [Payment Mode]=%s", "payment_mode", req.PaymentMode)
+
+	slog.Info(fmt.Sprintf("[PaymentHandler] Incoming Request [TransactionID --> %s] [IP --> %s] [PaymentMode --> %s]", req.TransactionID, r.RemoteAddr, req.PaymentMode))
 
 	if req.PaymentMode == "" {
-		slog.Error("[PaymentHandler] Missing Payment Mode in request, body: %s", "request_body", string(body))
+		slog.Error("[PaymentHandler] Missing Payment Mode in Request, body: %s", "[RequestBody]", string(body))
 		utils.SendErrorResponse(w, utils.InvalidPaymentMode, http.StatusBadRequest, nil)
 		return
 	}
@@ -104,25 +109,26 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.TransactionID != "" {
-		if cachedStatus, found := h.checkIdempotency(req.TransactionID); found {
-			slog.Debug("[PaymentHandler] Idempotent request: tx=%s status=%s", "transaction_id", req.TransactionID, "status", cachedStatus)
-			if cachedStatus == "COMPLETED" || cachedStatus == "PENDING" {
+		if cachedStatus, found := h.checkIdempotency(r.Context(), req.TransactionID); found {
+			slog.Debug(fmt.Sprintf("[PaymentHandler] Idempotent Request Check. Transaction [%s] Status [%s]", req.TransactionID, cachedStatus))
+
+			if cachedStatus == models.TransactionStatusSuccess || cachedStatus == models.TransactionStatusPending {
 				utils.SendSuccessResponse(w, "Payment Already Processed", map[string]any{
 					"transactionId": req.TransactionID,
 					"status":        cachedStatus,
 					"paymentMode":   req.PaymentMode,
 				}, http.StatusOK)
 			} else {
-				utils.SendErrorResponse(w, "Payment Failed", http.StatusBadRequest, nil)
+				utils.SendErrorResponse(w, utils.PaymentFailed, http.StatusBadRequest, nil)
 			}
 			return
 		}
 	}
 
-	slog.Info("[PaymentHandler] Routing Transaction [%s] to [%s] Provider", "transaction_id", req.TransactionID, "payment_mode", req.PaymentMode)
+	slog.Info(fmt.Sprintf("[PaymentHandler] Routing Transaction. [%s] to [%s] Provider", req.TransactionID, req.PaymentMode))
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 	provider.HandlePayment(w, r)
-	slog.Info("[PaymentHandler] Provider Processing Completed --> Transaction [%s]: Payment Mode [%s]", "transaction_id", req.TransactionID, "payment_mode", req.PaymentMode)
+	slog.Info(fmt.Sprintf("[PaymentHandler] Provider Processing Completed. Transaction [%s] | Payment Mode [%s]", req.TransactionID, req.PaymentMode))
 }
 
 // GetBeneficiaries retrieves saved beneficiaries for the authenticated user
@@ -135,30 +141,30 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} map[string]string
 // @Security BearerAuth
 // @Router /payment/beneficiaries [get]
-func (s *PaymentHandler) GetBeneficiaries(w http.ResponseWriter, r *http.Request) {
+func (h *PaymentHandler) GetBeneficiaries(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.GetBeneficiaries.start")
 	ctx := r.Context()
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, ctx)
 	cacheKey := fmt.Sprintf("beneficiaries:%d", userID)
 
-	if s.redis != nil {
-		if cached, err := s.redis.Get(ctx, cacheKey).Bytes(); err == nil {
-			slog.Info("account.GetBeneficiaries.cache_hit", "user_id", userID)
+	if h.redis != nil {
+		if cached, err := h.redis.Get(ctx, cacheKey).Bytes(); err == nil {
+			slog.Info("account.beneficiaries.cache_hit", "user_id", userID)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(cached)
 			return
 		}
-		slog.Info("account.GetBeneficiaries.cache_miss", "user_id", userID)
+		slog.Info("account.beneficiaries.cache_miss", "user_id", userID)
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := h.db.QueryContext(ctx, `
 		SELECT id, account_number, account_name, bank_name, bank_code
 		FROM beneficiaries
 		WHERE user_id = $1
 		ORDER BY created_at DESC
 	`, userID)
 	if err != nil {
-		slog.Error("account.get_beneficiaries.query_failed", "user_id", userID, "error", err)
+		slog.Error("account.beneficiaries.query_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, "Failed to fetch beneficiaries", http.StatusFailedDependency, nil)
 		return
 	}
@@ -169,7 +175,7 @@ func (s *PaymentHandler) GetBeneficiaries(w http.ResponseWriter, r *http.Request
 		var id int
 		var accountNumber, accountName, bankName, bankCode string
 		if err := rows.Scan(&id, &accountNumber, &accountName, &bankName, &bankCode); err != nil {
-			slog.Error("account.get_beneficiaries.scan_error", "user_id", userID, "error", err)
+			slog.Error("account.beneficiaries.scan_error", "user_id", userID, "error", err)
 			continue
 		}
 		beneficiaries = append(beneficiaries, map[string]any{
@@ -178,16 +184,16 @@ func (s *PaymentHandler) GetBeneficiaries(w http.ResponseWriter, r *http.Request
 			"accountName":   accountName,
 			"bankName":      bankName,
 			"bankCode":      bankCode,
-			"bankLogo":      s.bankService.LoadLogo(bankCode),
+			"bankLogo":      h.bankService.LoadLogo(bankCode),
 		})
 	}
 
 	slog.Info("account.get.beneficiaries.done", "user_id", userID, "count", len(beneficiaries))
 
 	payload, _ := json.Marshal(map[string]any{"beneficiaries": beneficiaries})
-	if s.redis != nil {
+	if h.redis != nil {
 		slog.Info("account.get.beneficiaries.caching_result", "user_id", userID)
-		s.redis.Set(ctx, cacheKey, payload, 10*time.Minute)
+		h.redis.Set(ctx, cacheKey, payload, 10*time.Minute)
 	}
 
 	utils.SendSuccessResponse(w, "Returning Beneficiaries", beneficiaries, http.StatusOK)

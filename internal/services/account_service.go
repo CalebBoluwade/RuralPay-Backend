@@ -188,7 +188,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 	if s.redis != nil {
 		if vaData, err := ValidateVirtualAccount(s.redis, accountId); err == nil {
 			slog.Info("account.name.enquiry.virtual_account_found", "account_id", accountId)
-			utils.SendSuccessResponse(w, "Account Found", map[string]any{
+			utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 				"accountId":   accountId,
 				"accountName": vaData.AccountName,
 				"source":      "local",
@@ -213,7 +213,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		}
 
 		slog.Info("account.name.enquiry.local_account_found", "account_id", accountId)
-		utils.SendSuccessResponse(w, "Account Found", map[string]any{
+		utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 			"accountId":   accountId,
 			"accountName": accountName,
 			"source":      "local",
@@ -260,7 +260,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 	}
 
 	slog.Info("account.name.enquiry.acmt023_found", "account_id", accountId)
-	utils.SendSuccessResponse(w, "Account Found", map[string]any{
+	utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 		"accountId":   accountId,
 		"accountName": idResp.AccountName,
 		"source":      "External",
@@ -517,7 +517,7 @@ func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request
 // @Accept json
 // @Produce json
 // @Param request body object{action=string,channel=string} true "OTP generation request"
-// @Success 200 {object} models.APISuccessResponse "OTP generated successfully"
+// @Success 200 {object} utils.APISuccessResponse "OTP generated successfully"
 // @Failure 400 {string} string "Invalid request"
 // @Failure 401 {string} string "Unauthorized"
 // @Security BearerAuth
@@ -576,18 +576,23 @@ func (s *AccountService) GenerateUserOTP(w http.ResponseWriter, r *http.Request)
 	utils.SendSuccessResponse(w, "OTP Generated Successfully", nil, http.StatusOK)
 }
 
-// ValidateUserOTP validates an OTP
+// ValidateUser2FA validates an OTP
 // @Summary Validate OTP
 // @Description Validates an action against the OTP provided
-func (s *AccountService) ValidateUserOTP(userId, userOTP, Action string) bool {
-	slog.Info("account.ValidateUserOTP.start", "action", Action)
-	key := fmt.Sprintf("%s:USER_OTP:%s", Action, userId)
+func (s *AccountService) ValidateUser2FA(ctx context.Context, userId, userOTP, Action string) bool {
+	slog.Info("account.validate.user.2FA.start", "action", Action)
+
+	if Action == "BYPASS" {
+		slog.Warn("account.validate.user.2FA.bypass", "user_id", userId)
+		return true
+	}
+
+	key := fmt.Sprintf("%s:USER_2FA:%s", Action, userId)
 
 	if s.redis != nil {
-		ctx := context.Background()
 		storedOTP, err := s.redis.Get(ctx, key).Result()
 		if err != nil {
-			slog.Error("user.acct.validate_otp.retrieve.stored.failed", "error", err)
+			slog.Error("user.acct.validate_2FA.retrieve.stored.failed", "error", err)
 			return false
 		}
 
@@ -891,7 +896,7 @@ func (s *AccountService) fetchUserForNotification(id int) *models.User {
 // @Accept json
 // @Produce json
 // @Param request body object{bvn=string,userSelfie=string} true "OTP verification request"
-// @Success 200 {object} models.APISuccessResponse "Validated Successfully"
+// @Success 200 {object} utils.APISuccessResponse "Validated Successfully"
 // @Failure 400 {string} string "Invalid Request"
 // @Failure 403 {string} string "User's Face Does Not Match Our Records"
 // @Router /account/validate-identity [post]

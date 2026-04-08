@@ -111,11 +111,10 @@ func (iso *ISO20022Service) ConvertToISO20022(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":      "converted",
+	utils.SendSuccessResponse(w, "Successfully converted to ISO20022", map[string]any{
 		"messageType": "pacs.008.001.08",
 		"xml":         xmlData,
-	})
+	}, http.StatusOK)
 }
 
 // ProcessSettlement processes transaction settlement
@@ -154,11 +153,10 @@ func (iso *ISO20022Service) ProcessSettlement(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":      resp.Status,
+	utils.SendSuccessResponse(w, "Successful", map[string]any{
 		"messageType": "pacs.002.001.08",
 		"response":    resp,
-	})
+	}, http.StatusOK)
 }
 
 func (iso *ISO20022Service) ConvertTransaction(tx *models.TransactionRecord) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
@@ -324,8 +322,8 @@ func (iso *ISO20022Service) CreateAcmt023(accountNumber, bankCode string) (*acmt
 	return doc, nil
 }
 
-func ptr140(s string) *common.Max140Text { v := common.Max140Text(s); return &v }
-func ptr35(s string) *common.Max35Text   { v := common.Max35Text(s); return &v }
+func ptr140(s string) *common.Max140Text { return new(common.Max140Text(s)) }
+func ptr35(s string) *common.Max35Text   { return new(common.Max35Text(s)) }
 
 // CreatePacs028 builds a pacs.028 FIToFIPaymentStatusRequest for the given original transaction
 func (iso *ISO20022Service) CreatePacs028(originalMsgID, originalTxID string) (*pacs_v04.FIToFIPaymentStatusRequestV04, error) {

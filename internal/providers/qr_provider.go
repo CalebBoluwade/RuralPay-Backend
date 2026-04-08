@@ -98,7 +98,7 @@ func (p *QRPaymentProvider) ProcessPayment(ctx context.Context, req *models.Paym
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       err.Error(),
+			Message:       utils.ValidationError,
 			PaymentMode:   models.PaymentModeQR,
 			Timestamp:     time.Now(),
 		}, err

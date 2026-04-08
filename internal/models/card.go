@@ -32,8 +32,8 @@ type CardInfo struct {
 	ATC           int    `json:"ATC"`
 	CVR           string `json:"CVR"`
 	IssuerAppData string `json:"issuerAppData"`
-	// CountryCode   string `json:"countryCode"`
-	CurrencyCode string `json:"currencyCode"`
+	CountryCode   string `json:"countryCode"`
+	CurrencyCode  string `json:"currencyCode"`
 }
 
 type CardPaymentRequest struct {

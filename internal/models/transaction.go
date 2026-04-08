@@ -2,10 +2,13 @@ package models
 
 import (
 	"time"
+
+	"github.com/ruralpay/backend/internal/utils"
 )
 
 type PaymentMode string
 type PaymentType string
+type TransactionStatus string
 
 const (
 	PaymentModeCard         PaymentMode = "CARD"
@@ -21,6 +24,15 @@ const (
 	DebitPayment      PaymentType = "DEBIT"
 	CreditPayment     PaymentType = "CREDIT"
 	WithdrawalPayment PaymentType = "WITHDRAWAL"
+)
+
+const (
+	TransactionStatusPending       TransactionStatus = "PENDING"
+	TransactionStatusSuccess       TransactionStatus = "COMPLETED"
+	TransactionStatusFailed        TransactionStatus = "FAILED"
+	TransactionStatusCancelled     TransactionStatus = "Cancelled"
+	TransactionSettlementFailed    TransactionStatus = "FAILED_SETTLEMENT"
+	TransactionStatusISOCONVFailed TransactionStatus = "FAILED_ISO_CONVERSION"
 )
 
 type USSDCodeType string
@@ -49,18 +61,19 @@ type PaymentRequest struct {
 	PaymentMode              PaymentMode `json:"paymentMode"`
 	SaveBeneficiary          bool        `json:"saveBeneficiary"`
 	OneTimeCode              string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
+	TwoFAType                string      `json:"twoFAType" validate:"required,oneof=BYPASS,OTP,BIOMETRIC"`
 	Location                 *Location   `json:"location,omitempty"`
 }
 
 type PaymentResponse struct {
-	Success       bool        `json:"success"`
-	TransactionID string      `json:"transactionId"`
-	Reference     string      `json:"reference"`
-	Status        string      `json:"status"`
-	Message       string      `json:"message"`
-	Metadata      Metadata    `json:"metadata"`
-	PaymentMode   PaymentMode `json:"paymentMode"`
-	Timestamp     time.Time   `json:"timestamp"`
+	Success       bool                  `json:"success"`
+	TransactionID string                `json:"transactionId"`
+	Reference     string                `json:"reference"`
+	Status        TransactionStatus     `json:"status"`
+	Message       utils.ResponseMessage `json:"message"`
+	Metadata      Metadata              `json:"metadata"`
+	PaymentMode   PaymentMode           `json:"paymentMode"`
+	Timestamp     time.Time             `json:"timestamp"`
 }
 
 // Location represents geographical location data
@@ -83,31 +96,32 @@ type AirtimeDataRequest struct {
 	PaymentMode   PaymentMode `json:"paymentMode"`
 	Voucher       Voucher     `json:"voucher,omitempty"`
 	OneTimeCode   string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
+	TwoFAType     string      `json:"twoFAType" validate:"required,oneof=BYPASS,OTP,BIOMETRIC"`
 	Location      *Location   `json:"location,omitempty"`
 }
 
 // TransactionRecord represents a payment transaction
 type TransactionRecord struct {
-	ID            int        `json:"id" db:"id"`
-	TransactionID string     `json:"transactionId" db:"transaction_id"`
-	Reference     string     `json:"reference" db:"reference"`
-	FromAccountID string     `json:"from_account_id" db:"from_account_id"`
-	ToAccountID   string     `json:"to_account_id" db:"to_account_id"`
-	Amount        int64      `json:"amount" db:"amount"`
-	Fee           int64      `json:"fee" db:"fee"`
-	TotalAmount   int64      `json:"total_amount" db:"total_amount"`
-	Currency      string     `json:"currency" db:"currency"`
-	Status        string     `json:"status" db:"status"`
-	Type          string     `json:"type" db:"type"`
-	Signature     string     `json:"signature" db:"signature"`
-	DeviceID      string     `json:"device_id" db:"device_id"`
-	Location      Location   `json:"location" db:"location"`
-	SyncStatus    string     `json:"sync_status" db:"sync_status"`
-	ErrorMessage  string     `json:"error_message" db:"error_message"`
-	Metadata      Metadata   `json:"metadata" db:"metadata"`
-	ToBankCode    string     `json:"to_bank_code,omitempty"`
-	CreatedAt     time.Time  `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at" db:" updated_at"`
-	SettledAt     *time.Time `json:"settled_at" db:"settled_at"`
-	ProcessedAt   *time.Time `json:"processed_at" db:"processed_at"`
+	ID            int               `json:"id" db:"id"`
+	TransactionID string            `json:"transactionId" db:"transaction_id"`
+	Reference     string            `json:"reference" db:"reference"`
+	FromAccountID string            `json:"from_account_id" db:"from_account_id"`
+	ToAccountID   string            `json:"to_account_id" db:"to_account_id"`
+	Amount        int64             `json:"amount" db:"amount"`
+	Fee           int64             `json:"fee" db:"fee"`
+	TotalAmount   int64             `json:"total_amount" db:"total_amount"`
+	Currency      string            `json:"currency" db:"currency"`
+	Status        TransactionStatus `json:"status" db:"status"`
+	Type          string            `json:"type" db:"type"`
+	Signature     string            `json:"signature" db:"signature"`
+	DeviceID      string            `json:"device_id" db:"device_id"`
+	Location      Location          `json:"location" db:"location"`
+	SyncStatus    string            `json:"sync_status" db:"sync_status"`
+	ErrorMessage  string            `json:"error_message" db:"error_message"`
+	Metadata      Metadata          `json:"metadata" db:"metadata"`
+	ToBankCode    string            `json:"to_bank_code,omitempty"`
+	CreatedAt     time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at" db:" updated_at"`
+	SettledAt     *time.Time        `json:"settled_at" db:"settled_at"`
+	ProcessedAt   *time.Time        `json:"processed_at" db:"processed_at"`
 }

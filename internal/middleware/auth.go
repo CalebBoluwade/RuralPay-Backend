@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/ruralpay/backend/internal/constants"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/services"
 	"github.com/ruralpay/backend/internal/utils"
@@ -47,7 +48,7 @@ func checkTokenBlacklist(token string) bool {
 	if redisClient == nil {
 		return false
 	}
-	key := utils.BlacklistKeyPrefix + token
+	key := constants.BlacklistKeyPrefix + token
 	exists, _ := redisClient.Exists(context.Background(), key).Result()
 	return exists > 0
 }
@@ -124,7 +125,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx := r.Context()
-		if err := validateSession(ctx, utils.SessionKeyPrefix+sid, deviceID); err != nil {
+		if err := validateSession(ctx, constants.SessionKeyPrefix+sid, deviceID); err != nil {
 			if errors.Is(err, utils.ErrSessionNotFound) || errors.Is(err, utils.ErrInvalidSession) {
 				validator.SendErrorResponse(w, "Session Locked - User Presence Required", http.StatusLocked, nil)
 				return
@@ -158,7 +159,7 @@ func CreateSession(ctx context.Context, rdb *redis.Client, sessionID string, s m
 	data, _ := json.Marshal(s)
 
 	return rdb.Set(ctx,
-		utils.SessionKeyPrefix+sessionID,
+		constants.SessionKeyPrefix+sessionID,
 		data,
 		cfg.InactivityTTL, // inactivity TTL
 	).Err()
@@ -172,7 +173,7 @@ func RotateRefreshToken(
 	cfg models.SessionConfig,
 ) error {
 
-	key := utils.SessionKeyPrefix + sid
+	key := constants.SessionKeyPrefix + sid
 
 	pipe := rdb.TxPipeline()
 

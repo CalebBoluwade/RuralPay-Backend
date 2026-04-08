@@ -88,8 +88,8 @@ func (s *VoiceBankingService) TranscribeAudio(w http.ResponseWriter, r *http.Req
 	duration := time.Since(startTime).Seconds()
 
 	if err != nil {
-		slog.Error("[VOICE] Transcription failed for user %s: %v", "user_id", userID, "error", err)
-		utils.SendErrorResponse(w, "Failed to transcribe audio", http.StatusFailedDependency, nil)
+		slog.Error("[VOICE] Audio Transcription Failed for user %s: %v", "user_id", userID, "error", err)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusFailedDependency, nil)
 		return
 	}
 

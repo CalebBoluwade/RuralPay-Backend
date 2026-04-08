@@ -30,11 +30,11 @@ func NewDataProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSMInterfa
 }
 
 func (p *DataProvider) GetPaymentMode() models.PaymentMode {
-	return models.PaymentModeAirtime
+	return models.PaymentModeData
 }
 
 func (p *DataProvider) ValidatePayment(ctx context.Context, req *models.PaymentRequest) error {
-	isValid2FA := p.acctService.ValidateUserOTP(req.UserID, req.OneTimeCode, "2FA-CODE")
+	isValid2FA := p.acctService.ValidateUser2FA(ctx, req.UserID, req.OneTimeCode, req.TwoFAType)
 	if !isValid2FA {
 		slog.Warn("account.verify_otp.not_found_or_expired")
 		return errors.New(utils.MultiFactorAuthError.Response())
@@ -79,7 +79,7 @@ func (p *DataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
 
 	if err := dec.Decode(&req); err != nil {
 		slog.Error("airtime_data.handle.decode_failed", "error", err)
-		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
 
@@ -106,7 +106,7 @@ func (p *DataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
 	var status string
 	err := p.DB.QueryRowContext(ctx, `SELECT balance, status FROM accounts WHERE account_id = $1`, req.DebitAccount).Scan(&balance, &status)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			utils.SendErrorResponse(w, "Account not found", http.StatusBadRequest, nil)
 			return
 		}
@@ -115,7 +115,7 @@ func (p *DataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status != "ACTIVE" {
-		utils.SendErrorResponse(w, "Account not active", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, "Account Not Active", http.StatusBadRequest, nil)
 		return
 	}
 	if balance < req.Amount {

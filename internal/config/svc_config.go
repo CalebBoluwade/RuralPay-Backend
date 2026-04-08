@@ -84,12 +84,13 @@ func init() {
 	viper.SetDefault("iso20022.callback.require_auth", true)
 
 	// NIBSS ISO 20022 per-message-family endpoints
-	_ = viper.BindEnv("nibss.pacs.endpoint.url", "NIBSS_PACS_ENDPOINT_URL")
-	_ = viper.BindEnv("nibss.acmt.endpoint.url", "NIBSS_ACMT_ENDPOINT_URL")
-	_ = viper.BindEnv("nibss.pain.endpoint.url", "NIBSS_PAIN_ENDPOINT_URL")
+	_ = viper.BindEnv("nibss.iso20022.base.url", "NIBSS_ISO20022_BASE_URL")
 
 	// ISO 8583 (card payment settlement)
-	_ = viper.BindEnv("iso8583.base_url", "ISO8583_BASE_URL")
+	_ = viper.BindEnv("nibss.iso8583.base_url", "NIBSS_ISO8583_BASE_URL")
+	_ = viper.BindEnv("iso8583.ssl_cert_path", "ISO8583_SSL_CERT_PATH")
+	_ = viper.BindEnv("iso8583.ssl_key_path", "ISO8583_SSL_KEY_PATH")
+
 	_ = viper.BindEnv("iso8583.acquiring_institution_id", "ISO8583_ACQUIRING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.forwarding_institution_id", "ISO8583_FORWARDING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.terminal_id", "ISO8583_TERMINAL_ID")

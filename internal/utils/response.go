@@ -34,8 +34,8 @@ const (
 	FetchTransaction     ResponseMessage = "Failed to Fetch Transaction"
 	SingleLimitError     ResponseMessage = "Single Transaction Limit Cannot Exceed Daily Limit"
 	PaymentFailed        ResponseMessage = "Payment Processing Failed"
-	ProcessingFailed     ResponseMessage = "Unable to Process Payment Request at this time"
 	InvalidPaymentMode   ResponseMessage = "Invalid Payment Mode"
+	ProcessingFailed     ResponseMessage = "Unable to Process Request at this time"
 	OTPGenerationError   ResponseMessage = "Failed to Generate OTP"
 
 	InternalServiceError ResponseMessage = "Internal Service Error"
@@ -44,6 +44,7 @@ const (
 // Success Responses
 const (
 	UserCreated          ResponseMessage = "User Created Successfully"
+	AccountFound         ResponseMessage = "Account Found Successfully"
 	LoginSuccess         ResponseMessage = "Login Successful"
 	ResetLinkSent        ResponseMessage = "Password Reset Link Sent to your Email Address"
 	OTPSent              ResponseMessage = "OTP Sent to your Email Address"

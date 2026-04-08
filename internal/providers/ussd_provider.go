@@ -70,7 +70,7 @@ func (p *USSDPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 		FOR UPDATE
 	`, hashedCode, codeType).Scan(&transactionId, &userID, &amount, &expiresAt, &used)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return errors.New("invalid code")
 	}
 	if err != nil {
@@ -146,7 +146,7 @@ func (p *USSDPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       err.Error(),
+			Message:       utils.ResponseMessage(err.Error()),
 			PaymentMode:   models.PaymentModeUSSD,
 			Timestamp:     time.Now(),
 		}, err

@@ -70,7 +70,7 @@ func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *
 		return err
 	}
 
-	isValid2FA := p.acctService.ValidateUserOTP(req.UserID, req.OneTimeCode, "2FA-CODE")
+	isValid2FA := p.acctService.ValidateUser2FA(ctx, req.UserID, req.OneTimeCode, req.TwoFAType)
 	if !isValid2FA {
 		slog.Warn("account.verify_otp.not_found_or_expired")
 		return errors.New(utils.MultiFactorAuthError.Response())
@@ -94,7 +94,7 @@ func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *
 	err := p.DB.QueryRowContext(ctx, `SELECT balance, status FROM accounts WHERE account_id = $1`, req.FromAccount).Scan(&balance, &status)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("source account not found")
 		}
 		slog.Error("bank_transfer.validate.db_error", "error", err)
@@ -124,8 +124,8 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
-			Status:        "FAILED",
-			Message:       err.Error(),
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ValidationError,
 			PaymentMode:   models.PaymentModeBankTransfer,
 			Timestamp:     time.Now(),
 		}, err
@@ -161,13 +161,13 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 
 	slog.Info("bank_transfer.process.ledger_transfer", "tx_id", req.TransactionID)
 	if err := p.ledgerService.TransferTx(tx, req.FromAccount, req.BeneficiaryAccountNumber, req.TransactionID, totalAmount); err != nil {
-		slog.Error("bank_transfer.process.ledger_failed", "tx_id", req.TransactionID, "error", err)
+		slog.Error("bank_transfer.process.ledger_failed", "tx_id", req.TransactionID, "error", err.Error())
 		return &models.PaymentResponse{
 			Reference:     "-",
 			Success:       false,
 			TransactionID: req.TransactionID,
-			Status:        "FAILED",
-			Message:       err.Error(),
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.InternalServiceError,
 			PaymentMode:   models.PaymentModeBankTransfer,
 			Timestamp:     time.Now(),
 		}, err
@@ -204,17 +204,17 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	// settlementErr, shouldReverse := p.sendToSettlement(ctx, req)
 	// if settlementErr != nil {
 	// 	if shouldReverse {
-	// 		slog.Info("[BankTransferProvider] Settlement Failed. Reversing transaction --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
+	// 		slog.Info(fmt.Sprintf("[BankTransferProvider] Settlement Failed. Reversing transaction --> [Transaction ID]=%s %v", req.TransactionID, settlementErr))
 	// 		if revErr := p.ledgerService.Reverse(req.TransactionID); revErr != nil {
-	// 			slog.Error("[BankTransferProvider] Reversal Failed --> [Transaction ID]=%s %v", req.TransactionID, revErr)
+	// 			slog.Error(fmt.Sprintf("[BankTransferProvider] Reversal Failed --> [Transaction ID]=%s %v", req.TransactionID, revErr))
 	// 		}
 	// 	} else {
-	// 		slog.Error("[BankTransferProvider] Settlement Failed (retryable). Transaction remains pending --> [Transaction ID]=%s %v", req.TransactionID, settlementErr)
+	// 		slog.Error(fmt.Sprintf("[BankTransferProvider] Settlement Failed (retryable). Transaction remains pending --> [Transaction ID]=%s %v", req.TransactionID, settlementErr))
 	// 	}
 	// 	return &models.PaymentResponse{
 	// 		Success:       false,
 	// 		TransactionID: req.TransactionID,
-	// 		Status:        "FAILED",
+	// 		Status:        models.TransactionStatusFailed,
 	// 		Message:       fmt.Sprintf("Settlement Failed: %v", settlementErr),
 	// 		PaymentMode:   models.PaymentModeBankTransfer,
 	// 		Timestamp:     time.Now(),
@@ -225,8 +225,8 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		Success:       true,
 		Reference:     "000000000000000000000000000",
 		TransactionID: req.TransactionID,
-		Status:        "COMPLETED",
-		Message:       "Bank transfer successful",
+		Status:        models.TransactionStatusSuccess,
+		Message:       "Transaction Successful",
 		PaymentMode:   models.PaymentModeBankTransfer,
 		Timestamp:     time.Now(),
 	}, nil
@@ -246,7 +246,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req 
 		Type:          string(req.TxType),
 		Amount:        req.Amount,
 		Currency:      req.Currency,
-		Status:        "PENDING",
+		Status:        models.TransactionStatusPending,
 	}
 
 	if bankCode, ok := req.Metadata["toBankCode"].(string); ok {
@@ -256,7 +256,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req 
 	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
 	if err != nil {
 		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
-		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_ISO_CONVERSION", req.TransactionID); dbErr != nil {
+		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionStatusISOCONVFailed, req.TransactionID); dbErr != nil {
 			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 		}
 		return err, true
@@ -268,7 +268,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req 
 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
 		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
 		if shouldReverse {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID); dbErr != nil {
+			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionSettlementFailed, req.TransactionID); dbErr != nil {
 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 			}
 		} else {
@@ -281,7 +281,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req 
 
 	slog.Info("bank_transfer.settlement.success", "tx_id", req.TransactionID, "status", resp.Status)
 	respJSON, _ := json.Marshal(resp)
-	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, "SETTLED", respJSON, req.TransactionID); dbErr != nil {
+	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, models.TransactionStatusSuccess, respJSON, req.TransactionID); dbErr != nil {
 		slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
 	}
 	return nil, false

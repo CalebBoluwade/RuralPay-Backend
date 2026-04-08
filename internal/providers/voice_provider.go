@@ -82,7 +82,7 @@ func (p *VoicePaymentProvider) ProcessPayment(ctx context.Context, req *models.P
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        "FAILED",
-			Message:       err.Error(),
+			Message:       utils.ResponseMessage(err.Error()),
 			PaymentMode:   models.PaymentModeVoice,
 			Timestamp:     time.Now(),
 		}, err

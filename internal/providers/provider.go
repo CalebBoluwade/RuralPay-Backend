@@ -104,7 +104,7 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 				ToAccountID:   req.BeneficiaryAccountNumber,
 				Amount:        req.Amount,
 				Currency:      req.Currency,
-				Status:        "FAILED",
+				Status:        response.Status,
 				CreatedAt:     time.Now(),
 				Metadata: map[string]any{
 					"beneficiaryName":     req.BeneficiaryAccountName,
@@ -118,12 +118,12 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 			}
 		}()
 
-		utils.SendErrorResponse(w, utils.PaymentFailed, http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, response.Message, http.StatusBadRequest, nil)
 		return
 	}
 
 	slog.Info("payment.handle.processed", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
-	base.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
+	//base.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
 
 	go func() {
 		user := base.fetchUserForNotification(userID)
@@ -170,10 +170,10 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	}()
 
 	if response.Success {
-		utils.SendSuccessResponse(w, utils.ResponseMessage(response.Message), response, http.StatusOK)
+		utils.SendSuccessResponse(w, response.Message, response, http.StatusOK)
 	} else {
 		slog.Warn("payment.handle.unsuccessful", "tx_id", req.TransactionID, "message", response.Message)
-		utils.SendErrorResponse(w, utils.ResponseMessage(response.Message), http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, response.Message, http.StatusBadRequest, nil)
 	}
 }
 
@@ -192,17 +192,23 @@ func (base *BasePaymentProvider) fetchUserForNotification(id int) *models.User {
 	return user
 }
 
-func (base *BasePaymentProvider) checkIdempotency(txID string) (string, bool) {
-	ctx := context.Background()
+func (base *BasePaymentProvider) checkIdempotency(ctx context.Context, txID string) (models.TransactionStatus, bool) {
 	key := fmt.Sprintf("idempotency:%s", txID)
-	status, err := base.Redis.Get(ctx, key).Result()
-	if err == nil {
-		return status, true
+
+	val, err := base.Redis.Get(ctx, key).Result()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			// Log real errors so you know if Redis is failing
+			slog.Error("Redis error checking idempotency for %s: %v", txID, err)
+		}
+		return "", false
 	}
-	return "", false
+
+	// Cast the string result to your custom Status type
+	return models.TransactionStatus(val), true
 }
 
-func (base *BasePaymentProvider) setIdempotency(txID, status string) {
+func (base *BasePaymentProvider) setIdempotency(txID string, status models.TransactionStatus) {
 	ctx := context.Background()
 	key := fmt.Sprintf("idempotency:%s", txID)
 	base.Redis.SetEX(ctx, key, status, 24*time.Hour)

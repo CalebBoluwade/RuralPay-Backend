@@ -117,7 +117,7 @@ func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.R
 
 	_, err := s.hsm.GenerateAndSaveKeyPairExternal("app_signing")
 	if err != nil {
-		slog.ErrorContext(req.Context(), "failed to generate key pair external for app_signing: %v", err)
+		slog.ErrorContext(ctx, "failed to generate key pair external for app_signing: %v", err)
 		utils.SendErrorResponse(w, "Public Key Not Found", http.StatusNotFound, nil)
 		return
 	}
