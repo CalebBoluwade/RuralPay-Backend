@@ -44,6 +44,9 @@ func init() {
 	_ = viper.BindEnv("jwt.expiry_minutes", "JWT_EXPIRY_MINUTES")
 	viper.SetDefault("jwt.expiry_minutes", 15)
 
+	_ = viper.BindEnv("auth.use_encrypted_password", "AUTH_USE_ENCRYPTED_PASSWORD")
+	viper.SetDefault("auth.use_encrypted_password", true)
+
 	_ = viper.BindEnv("jwt.issuer", "JWT_ISSUER")
 	_ = viper.BindEnv("jwt.audience", "JWT_AUDIENCE")
 	_ = viper.BindEnv("argon2.time", "ARGON2_TIME")

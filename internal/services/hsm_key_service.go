@@ -107,11 +107,18 @@ func (s *HSMKeyService) getKeyTypeAndSize(keyID, publicKeyPEM string) (string, i
 // @Router /encryption/keys [put]
 func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	userIsAdmin, _ := utils.ExtractIsAdminFromContext(w, ctx)
-	if !userIsAdmin {
-		utils.SendErrorResponse(w, "Insufficient Privileges", http.StatusForbidden, nil)
-		return
-	}
+	// userIsAdmin, err := utils.ExtractIsAdminFromContext(w, ctx)
+	// if err != nil {
+	// 	slog.Error("create.key.pair.external.extract_admin_failed", "error", err)
+	// 	utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusUnauthorized, nil)
+	// 	return
+	// }
+
+	// if !userIsAdmin {
+	// 	slog.Warn("create.key.pair.external.unauthorized", "reason", "user is not admin", "path", path.Base(req.URL.Path))
+	// 	utils.SendErrorResponse(w, "Insufficient Privileges", http.StatusForbidden, nil)
+	// 	return
+	// }
 
 	slog.Info("create.key.pair.external")
 

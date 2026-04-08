@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,20 +27,22 @@ import (
 )
 
 type UserService struct {
-	db              *sql.DB
-	redis           *redis.Client
-	validator       *validator.Validate
-	notificationSvc *NotificationService
-	hsm             hsm.HSMInterface
+	db                   *sql.DB
+	redis                *redis.Client
+	validator            *validator.Validate
+	useEncryptedPassword bool
+	notificationSvc      *NotificationService
+	hsm                  hsm.HSMInterface
 }
 
 func NewUserService(db *sql.DB, redisClient *redis.Client, hsmInstance hsm.HSMInterface, notificationService *NotificationService) *UserService {
 	return &UserService{
-		db:              db,
-		redis:           redisClient,
-		hsm:             hsmInstance,
-		validator:       validator.New(),
-		notificationSvc: notificationService,
+		db:                   db,
+		redis:                redisClient,
+		hsm:                  hsmInstance,
+		validator:            validator.New(),
+		useEncryptedPassword: viper.GetBool("auth.use_encrypted_password"),
+		notificationSvc:      notificationService,
 	}
 }
 
@@ -228,14 +231,20 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decryptedPassword, err := s.hsm.DecryptPII(req.Password)
-	if err != nil {
-		slog.Error("auth.login.decrypt_failed", "error", err)
-		utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
-		return
+	var password string = req.Password
+
+	if s.useEncryptedPassword {
+		decryptedPassword, err := s.hsm.DecryptPII(password)
+		if err != nil {
+			slog.Error("auth.login.decrypt_failed", "error", err)
+			utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
+			return
+		}
+
+		password = decryptedPassword
 	}
 
-	if !verifyPassword(decryptedPassword, hashedPassword) {
+	if !verifyPassword(password, hashedPassword) {
 		slog.Warn("auth.login.invalid_password")
 		utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
 		return
@@ -278,7 +287,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID := fmt.Sprintf("%s_%s_%s", req.DeviceInfo.Platform, req.DeviceInfo.Model, req.DeviceInfo.OSVersion)
 
-	token, err := generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
+	token, err := s.generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.login.jwt_failed", "user_id", user.ID, "error", err)
 		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusFailedDependency, nil)
@@ -562,19 +571,28 @@ func accessTokenExpiry() time.Duration {
 	return d
 }
 
-func generateJWTWithSession(userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
+func (s *UserService) generateJWTWithSession(userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
 	expiry := accessTokenExpiry()
 	now := time.Now()
 
+	isActive, isAdmin, err := s.CheckUserStatusAndPrivileges(strconv.Itoa(userID))
+
+	if err != nil {
+		slog.Error("auth.check_user_status_failed", "user_id", userID, "error", err)
+		return "", fmt.Errorf("failed to check user status")
+	}
+
 	claims := jwt.MapClaims{
-		"user_id": userID,
-		"sub":     userID,
-		"sid":     sessionID,
-		"did":     deviceID,
-		"iat":     now.Unix(),
-		"exp":     now.Add(expiry).Unix(),
-		"iss":     viper.GetString("jwt.issuer"),
-		"aud":     viper.GetString("jwt.audience"),
+		"user_id":  userID,
+		"sub":      userID,
+		"sid":      sessionID,
+		"isActive": isActive,
+		"isAdmin":  isAdmin,
+		"did":      deviceID,
+		"iat":      now.Unix(),
+		"exp":      now.Add(expiry).Unix(),
+		"iss":      viper.GetString("jwt.issuer"),
+		"aud":      viper.GetString("jwt.audience"),
 	}
 
 	slog.Info("auth.generate_jwt_session", "expiry", expiry)
@@ -693,7 +711,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	newAccessToken, err := generateJWTWithSession(userID, merchant, sessionID, deviceID)
+	newAccessToken, err := s.generateJWTWithSession(userID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.refresh.access_token_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusInternalServerError, nil)
@@ -959,17 +977,17 @@ func (s *UserService) CheckUserStatusAndPrivileges(userID string) (isActive, isA
 	return isActive, isAdmin, nil
 }
 
-// Deprecated: Use CheckUserStatusAndPrivileges instead
-func (s *UserService) CheckUserStatus(userID string) (bool, error) {
-	active, _, err := s.CheckUserStatusAndPrivileges(userID)
-	return active, err
-}
+// // Deprecated: Use CheckUserStatusAndPrivileges instead
+// func (s *UserService) CheckUserStatus(userID string) (bool, error) {
+// 	active, _, err := s.CheckUserStatusAndPrivileges(userID)
+// 	return active, err
+// }
 
-// Deprecated: Use CheckUserStatusAndPrivileges instead
-func (s *UserService) CheckUserIsAdmin(userID string) (bool, error) {
-	_, isAdmin, err := s.CheckUserStatusAndPrivileges(userID)
-	return isAdmin, err
-}
+// // Deprecated: Use CheckUserStatusAndPrivileges instead
+// func (s *UserService) CheckUserIsAdmin(userID string) (bool, error) {
+// 	_, isAdmin, err := s.CheckUserStatusAndPrivileges(userID)
+// 	return isAdmin, err
+// }
 
 func (s *UserService) UserFeedback(w http.ResponseWriter, r *http.Request) {
 	var req struct {

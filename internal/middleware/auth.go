@@ -150,7 +150,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 		if merchantID != nil {
 			ctx = context.WithValue(ctx, "merchantID", fmt.Sprintf("%v", merchantID))
 		}
-		ctx = context.WithValue(ctx, "isAdmin", fmt.Sprintf("%v", isAdmin))
+		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

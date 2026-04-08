@@ -27,16 +27,17 @@ func ExtractUserMerchantInfoFromContext(w http.ResponseWriter, ctx context.Conte
 }
 
 func ExtractIsAdminFromContext(w http.ResponseWriter, ctx context.Context) (bool, error) {
-	isAdminStr, ok := ctx.Value("isAdmin").(string)
-	if !ok || isAdminStr == "" {
+	isAdmin, ok := ctx.Value("isAdmin").(bool)
+	if !ok || isAdmin == false {
+		slog.Error("Unauthorized: isAdmin Not Found in Context", ctx.Value("isAdmin"))
 		return false, fmt.Errorf("isAdmin not found in context")
 	}
 
-	isAdmin, err := strconv.ParseBool(isAdminStr)
-	if err != nil {
-		slog.Error("Failed to parse isAdmin from context", "value", isAdminStr, "error", err)
-		return false, fmt.Errorf("failed to parse isAdmin: %w", err)
-	}
+	// isAdmin, err := strconv.ParseBool(isAdminStr)
+	// if err != nil {
+	// 	slog.Error("Failed to parse isAdmin from context", "value", isAdminStr, "error", err)
+	// 	return false, fmt.Errorf("failed to parse isAdmin: %w", err)
+	// }
 
 	return isAdmin, nil
 }
