@@ -12,6 +12,7 @@ import (
 
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/utils"
+	"github.com/spf13/viper"
 )
 
 type HSMKeyService struct {
@@ -163,9 +164,10 @@ func (s *HSMKeyService) GetUserPublicKeys(w http.ResponseWriter, r *http.Request
 	}
 	userPublicKeyPEM := string(pem.EncodeToMemory(block))
 
-	utils.SendSuccessResponse(w, "", map[string]string{
-		"publicKey": userPublicKeyPEM,
-		"algorithm": "RSA-OAEP",
-		"hash":      "SHA-256",
+	utils.SendSuccessResponse(w, "Retrieved Key Configuration Successfully", map[string]any{
+		"useEncryptedPayload": viper.GetBool("auth.use_encrypted_password"),
+		"publicKey":           userPublicKeyPEM,
+		"algorithm":           "RSA-OAEP",
+		"hash":                "SHA-256",
 	}, http.StatusOK)
 }

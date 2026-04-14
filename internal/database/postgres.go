@@ -52,8 +52,8 @@ func GetConfig() *DBConfig {
 
 const (
 	maxRetries   = 5
-	initialDelay = 2 * time.Second
-	maxDelay     = 30 * time.Second
+	initialDelay = 5 * time.Second
+	maxDelay     = 60 * time.Second
 )
 
 func connectWithRetry(database *sql.DB) error {

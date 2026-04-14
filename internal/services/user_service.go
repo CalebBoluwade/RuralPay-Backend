@@ -387,6 +387,8 @@ func (s *UserService) blacklistToken(ctx context.Context, token string, ttl time
 func (s *UserService) GetUserAccount(w http.ResponseWriter, r *http.Request) {
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
+	// Notifications, limits
+
 	var user models.User
 	err := s.db.QueryRow("SELECT users.id, email, first_name, last_name, phone_number, users.account_id FROM users LEFT JOIN accounts ON users.id = accounts.user_id WHERE users.id = $1",
 		userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.AccountId)
@@ -644,6 +646,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Error("refresh_token.decode_failed", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
@@ -654,6 +657,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil || !token.Valid || claims["type"] != "refresh" {
+		slog.Error("refresh_token.validate_failed", "error", err)
 		utils.SendErrorResponse(w, "Invalid refresh token", http.StatusUnauthorized, nil)
 		return
 	}
@@ -666,6 +670,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		ctx := context.Background()
 		exists, _ := s.redis.Exists(ctx, constants.SessionKeyPrefix+sessionID).Result()
 		if exists == 0 {
+			slog.Error("auth.delete.redis_scan_failed", "user_id", userID, "session_id", sessionID)
 			utils.SendErrorResponse(w, "Session Expired", http.StatusUnauthorized, nil)
 			return
 		}
@@ -680,6 +685,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	`, userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.Username, &user.AccountId, &mID)
 
 	if err != nil {
+		slog.Error("auth.refresh_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, utils.UserNotFoundError, http.StatusUnauthorized, nil)
 		return
 	}

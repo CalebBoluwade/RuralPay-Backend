@@ -163,40 +163,40 @@ func (iso *ISO20022Service) ConvertTransaction(tx *models.TransactionRecord) (*p
 	return iso.CreatePacs008(tx)
 }
 
-func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (SettlementResult, error) {
+func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (models.SettlementResult, error) {
 	xmlData, err := iso.ConvertToXML(pacs008)
 	if err != nil {
-		return SettlementResult{}, fmt.Errorf("failed to convert pacs.008 to XML: %w", err)
+		return models.SettlementResult{}, fmt.Errorf("failed to convert pacs.008 to XML: %w", err)
 	}
 
 	payload := []byte(xmlData)
 	if iso.senderPriv != nil && iso.nibssPub != nil {
 		signed, err := iso.SignXML(xmlData)
 		if err != nil {
-			return SettlementResult{}, fmt.Errorf("failed to sign pacs.008: %w", err)
+			return models.SettlementResult{}, fmt.Errorf("failed to sign pacs.008: %w", err)
 		}
 		payload, err = json.Marshal(signed)
 		if err != nil {
-			return SettlementResult{}, fmt.Errorf("failed to marshal signed message: %w", err)
+			return models.SettlementResult{}, fmt.Errorf("failed to marshal signed message: %w", err)
 		}
 	}
 
 	pacs002, err := iso.nibssClient.ProcessFundsTransferSettlement(ctx, payload)
 	if err != nil {
-		return SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
+		return models.SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
 	}
 
 	if pacs002 == nil || len(pacs002.TxInfAndSts) == 0 {
-		return SettlementResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
+		return models.SettlementResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
 	}
 
 	txSts := pacs002.TxInfAndSts[0]
 	if txSts.TxSts == nil {
-		return SettlementResult{}, fmt.Errorf("pacs.002 TxSts is nil")
+		return models.SettlementResult{}, fmt.Errorf("pacs.002 TxSts is nil")
 	}
 
 	status := string(*txSts.TxSts)
-	result := SettlementResult{Status: status}
+	result := models.SettlementResult{Status: status}
 
 	if txSts.OrgnlTxId != nil {
 		result.TransactionID = string(*txSts.OrgnlTxId)
@@ -354,33 +354,33 @@ func (iso *ISO20022Service) CreatePacs028(originalMsgID, originalTxID string) (*
 }
 
 // RequestPaymentStatus sends a pacs.028 to NIBSS and returns the pacs.002 status response
-func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMsgID, originalTxID string) (SettlementResult, error) {
+func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMsgID, originalTxID string) (models.SettlementResult, error) {
 	pacs028, err := iso.CreatePacs028(originalMsgID, originalTxID)
 	if err != nil {
-		return SettlementResult{}, fmt.Errorf("failed to build pacs.028: %w", err)
+		return models.SettlementResult{}, fmt.Errorf("failed to build pacs.028: %w", err)
 	}
 
 	xmlData, err := iso.ConvertToXML(pacs028)
 	if err != nil {
-		return SettlementResult{}, fmt.Errorf("failed to convert pacs.028 to XML: %w", err)
+		return models.SettlementResult{}, fmt.Errorf("failed to convert pacs.028 to XML: %w", err)
 	}
 
 	pacs002, err := iso.nibssClient.RequestPaymentStatus(ctx, []byte(xmlData))
 	if err != nil {
-		return SettlementResult{}, fmt.Errorf("failed to request payment status: %w", err)
+		return models.SettlementResult{}, fmt.Errorf("failed to request payment status: %w", err)
 	}
 
 	if pacs002 == nil || len(pacs002.TxInfAndSts) == 0 {
-		return SettlementResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
+		return models.SettlementResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
 	}
 
 	txSts := pacs002.TxInfAndSts[0]
 	if txSts.TxSts == nil {
-		return SettlementResult{}, fmt.Errorf("pacs.002 TxSts is nil")
+		return models.SettlementResult{}, fmt.Errorf("pacs.002 TxSts is nil")
 	}
 
 	status := string(*txSts.TxSts)
-	result := SettlementResult{Status: status}
+	result := models.SettlementResult{Status: status}
 
 	if txSts.OrgnlTxId != nil {
 		result.TransactionID = string(*txSts.OrgnlTxId)

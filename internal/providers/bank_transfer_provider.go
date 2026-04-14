@@ -287,7 +287,7 @@ func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req 
 	return nil, false
 }
 
-func (p *BankTransferPaymentProvider) shouldReverseOnSettlementFailure(resp services.SettlementResult) bool {
+func (p *BankTransferPaymentProvider) shouldReverseOnSettlementFailure(resp models.SettlementResult) bool {
 	switch resp.Status {
 	case "RJCT":
 		return true

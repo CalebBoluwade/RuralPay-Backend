@@ -91,11 +91,15 @@ func init() {
 
 	// ISO 8583 (card payment settlement)
 	_ = viper.BindEnv("nibss.iso8583.base_url", "NIBSS_ISO8583_BASE_URL")
-	_ = viper.BindEnv("iso8583.ssl_cert_path", "ISO8583_SSL_CERT_PATH")
-	_ = viper.BindEnv("iso8583.ssl_key_path", "ISO8583_SSL_KEY_PATH")
+	// _ = viper.BindEnv("nibss.iso8583.ssl_cert_path", "NIBSS_ISO8583_SSL_CERT_PATH")
+	// _ = viper.BindEnv("nibss.iso8583.ssl_key_path", "NIBSS_ISO8583_SSL_KEY_PATH")
+
+	_ = viper.BindEnv("nibss.iso8583.component_key_1", "NIBSS_ISO8583_ComponentKey1")
+	_ = viper.BindEnv("nibss.iso8583.component_key_2", "NIBSS_ISO8583_ComponentKey2")
 
 	_ = viper.BindEnv("iso8583.acquiring_institution_id", "ISO8583_ACQUIRING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.forwarding_institution_id", "ISO8583_FORWARDING_INSTITUTION_ID")
+	_ = viper.BindEnv("iso8583.receiving_institution_id", "ISO8583_RECEIVING_INSTITUTION_ID")
 	_ = viper.BindEnv("iso8583.terminal_id", "ISO8583_TERMINAL_ID")
 	_ = viper.BindEnv("iso8583.card_acceptor_id", "ISO8583_CARD_ACCEPTOR_ID")
 	_ = viper.BindEnv("iso8583.card_acceptor_name", "ISO8583_CARD_ACCEPTOR_NAME")
@@ -115,11 +119,17 @@ func init() {
 	viper.SetDefault("app.env", "production")
 	_ = viper.BindEnv("app.version", "APP_VERSION")
 	viper.SetDefault("app.version", "v1.0.0")
+
 	_ = viper.BindEnv("app.base_url", "APP_BASE_URL")
 	viper.SetDefault("app.base_url", "http://localhost:8080")
 
 	_ = viper.BindEnv("app.name", "APP_NAME")
 	viper.SetDefault("app.name", "RuralPay")
+
+	_ = viper.BindEnv("app.scheme", "APP_SCHEME")
+	viper.SetDefault("app.scheme", "ruralpay")
+
+	_ = viper.BindEnv("app.qr_route", "APP_QR_ROUTE")
 
 	_ = viper.BindEnv("session.inactivity_ttl_minutes", "SESSION_INACTIVITY_TTL_MINUTES")
 	viper.SetDefault("session.inactivity_ttl_minutes", 5)

@@ -12,7 +12,7 @@ import (
 // @Description Get a list of available data plans
 // @Tags Data Plans
 // @Produce json
-// @Success 200 {array} models.DataPlan
+// @Success 200 utils.APISuccessResponse models.DataPlan
 // @Router /api/v1/data-plans [get]
 func GetDataPlans(w http.ResponseWriter, r *http.Request) {
 	dataPlans := []models.DataPlan{

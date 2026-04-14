@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -23,7 +24,7 @@ import (
 
 type CardPaymentProvider struct {
 	*BasePaymentProvider
-	iso8583Service models.ISO8583Service
+	iso8583Service *services.ISO8583Service
 	nibssClient    *services.NIBSSClient
 }
 
@@ -95,31 +96,6 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}
 
 	slog.Info("card.process.building_ISO8583", "tx_id", req.TransactionID)
-	isoMsg, err := p.iso8583Service.BuildISO8583Message(cardReq)
-	if err != nil {
-		slog.Error("card.process.ISO8583_build_failed", "tx_id", req.TransactionID, "error", err)
-		return &models.PaymentResponse{
-			Success:       false,
-			TransactionID: req.TransactionID,
-			Status:        models.TransactionStatusFailed,
-			Message:       "Failed to Build Payment Message",
-			PaymentMode:   models.PaymentModeCard,
-			Timestamp:     time.Now(),
-		}, err
-	}
-
-	_, err = p.iso8583Service.ProcessMessage(ctx, isoMsg)
-	if err != nil {
-		slog.Error("card.process.ISO8583_failed", "tx_id", req.TransactionID, "error", err)
-		return &models.PaymentResponse{
-			Success:       false,
-			TransactionID: req.TransactionID,
-			Status:        models.TransactionStatusFailed,
-			Message:       utils.ProcessingFailed,
-			PaymentMode:   models.PaymentModeCard,
-			Timestamp:     time.Now(),
-		}, err
-	}
 
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -187,10 +163,92 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		return nil, err
 	}
 
-	resp, err := p.nibssClient.ProcessCardSettlement(ctx, isoMsg)
+	// Build ISO 0800 message for key exchange
+	cardISO0800, err := p.iso8583Service.BuildISO0800Message()
+	if err != nil {
+		slog.Error("card.process.ISO0800_build_failed", "tx_id", req.TransactionID, "error", err)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ProcessingFailed,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+
+	cardISO0800_, err := cardISO0800.Pack()
+	if err != nil {
+		slog.Error("card.process.ISO0800_pack_failed", "tx_id", req.TransactionID, "error", err)
+	}
+	slog.Info("card.process.ISO0800_built", "tx_id", req.TransactionID, "iso0800_hex", fmt.Sprintf("%X", cardISO0800_))
+
+	// Establish connection and send ISO 0800 message
+	conn, err := p.nibssClient.DialISO8583(ctx, time.Now().Add(30*time.Second))
+	if err != nil {
+		slog.Error("card.process.dial_failed", "tx_id", req.TransactionID, "error", err)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ProcessingFailed,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+	defer conn.Close()
+
+	// Send ISO 0800 message
+	res, err := p.nibssClient.SendAndReceive(conn, cardISO0800_)
+	if err != nil {
+		slog.Error("card.process.send_ISO0800_failed", "tx_id", req.TransactionID, "error", err)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ProcessingFailed,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+
+	slog.Info("card.process.ISO0800_success", "tx_id", req.TransactionID, "response_hex", fmt.Sprintf("%x", res))
+
+	// Read ISO 0810 response
+	resp0810, err := p.nibssClient.ReadISOMessage(conn, p.iso8583Service.CreateISO8583_0800_MessageSpec1987())
+	if err != nil {
+		slog.Error("card.process.read_ISO0810_failed", "tx_id", req.TransactionID, "error", err)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ProcessingFailed,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+
+	// Validate 0810 response
+	MTI, err := resp0810.GetMTI()
+	if err != nil || MTI != "0810" {
+		slog.Error("card.process.invalid_0810_response", "tx_id", req.TransactionID, "mti", MTI, "error", err)
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.ProcessingFailed,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, err
+	}
+
+	// Build ISO 0200 message for settlement
+	cardISO0200 := p.iso8583Service.BuildISO0200MessageTest()
+
+	resp, err := p.nibssClient.ProcessCardSettlement(ctx, cardISO0200)
 	if err != nil {
 		slog.Error("card.process.settlement_failed", "tx_id", req.TransactionID, "error", err)
-		p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)
+		p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "FAILED_SETTLEMENT", req.TransactionID)
 		return &models.PaymentResponse{
 			Success:       false,
 			TransactionID: req.TransactionID,
@@ -260,7 +318,7 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 
 	if cachedStatus, found := p.checkIdempotency(ctx, cardReq.TransactionID); found {
 		slog.Info("handle.card.payment.idempotent", "tx_id", cardReq.TransactionID, "cached_status", cachedStatus)
-		if cachedStatus == "COMPLETED" || cachedStatus == models.TransactionStatusPending {
+		if cachedStatus == models.TransactionStatusSuccess || cachedStatus == models.TransactionStatusPending {
 			utils.SendSuccessResponse(w, "Payment Already Processed", map[string]any{
 				"transactionId": cardReq.TransactionID,
 				"status":        cachedStatus,
