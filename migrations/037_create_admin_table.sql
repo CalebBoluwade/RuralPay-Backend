@@ -1,6 +1,5 @@
 -- Create admins table
 CREATE TABLE IF NOT EXISTS admins (
-    id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL UNIQUE,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),

@@ -36,11 +36,12 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 		service.ConvertToISO20022(w, r)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		var response map[string]any
+		var response utils.APISuccessResponse
 		json.Unmarshal(w.Body.Bytes(), &response)
-		assert.Equal(t, "converted", response["status"])
-		assert.Equal(t, "pacs.008.001.08", response["messageType"])
-		assert.NotEmpty(t, response["xml"])
+		details, ok := response.Details.(map[string]any)
+		assert.True(t, ok)
+		assert.Equal(t, "pacs.008.001.08", details["messageType"])
+		assert.NotEmpty(t, details["xml"])
 	})
 
 	t.Run("Unable To Process This Request At This Time", func(t *testing.T) {

@@ -59,7 +59,7 @@ func NewUserService(db *sql.DB, redisClient *redis.Client, hsmInstance hsm.HSMIn
 // @Failure 500 {string} string "Internal server error"
 // @Router /auth [post]
 func (s *UserService) RegisterNewUser(w http.ResponseWriter, r *http.Request) {
-	slog.Info("auth.register.attempt", "remote_addr", r.RemoteAddr)
+	slog.Info("auth.register.attempt", "remote_addr", utils.RealIP(r))
 
 	maxBytes := 1_048_576 // 1 MB
 	r.Body = http.MaxBytesReader(w, r.Body, int64(maxBytes))
@@ -119,8 +119,11 @@ func (s *UserService) RegisterNewUser(w http.ResponseWriter, r *http.Request) {
 			INSERT INTO user_limits (user_id, daily_limit, single_transaction_limit, updated_at)
 			SELECT id, $11, $12, NOW() FROM new_user
 			RETURNING user_id
+		),
+		new_notifications AS (
+			INSERT INTO notifications (user_id, use_device_push, use_sms, use_email, updated_at)
+			SELECT id, TRUE, FALSE, FALSE, NOW() FROM new_user
 		)
-		SELECT id FROM new_user
 	`, strings.ToLower(req.Email), req.Username, hashedPassword, req.FirstName, req.LastName, accountID, req.BVN, req.PhoneNumber, req.ExpoPushToken, req.IdentityToken, viper.GetInt64("user.default_daily_limit"), viper.GetInt64("user.default_single_tx_limit")).Scan(&userID)
 	if err != nil {
 		slog.Error("auth.register.user_creation_failed", "error", err)
@@ -188,6 +191,8 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	slog.Debug("auth.login.request", "LoginRequest", req)
 
+	reqCtx := r.Context()
+
 	var user models.User
 	var hashedPassword string
 
@@ -208,17 +213,37 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		SELECT 
 			u.id, u.email, u.first_name, u.last_name, u.phone_number, u.bvn, u.username, password, u.account_id,
 			m.id, m.business_name, m.business_type, m.tax_id, m.status, 
-			m.commission_rate, m.settlement_cycle, m.created_at, m.updated_at
+			m.commission_rate, m.settlement_cycle, m.created_at, m.updated_at,
+			ul.daily_limit, ul.single_transaction_limit,
+			un.use_device_push, un.use_sms, un.use_email
 		FROM users u
 		LEFT JOIN merchants m ON u.id = m.user_id
+		LEFT JOIN user_limits ul ON u.id = ul.user_id
+		LEFT JOIN notifications un ON u.id = un.user_id
 		WHERE (u.phone_number = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(u.username) = LOWER($1))
 		  AND u.deleted_at IS NULL`
 
-	err := s.db.QueryRow(query, req.Identifier).Scan(
+	var (
+		lDailyLimit    sql.NullFloat64
+		lSingleTxLimit sql.NullFloat64
+		nDevicePush    sql.NullBool
+		nSMS           sql.NullBool
+		nEmail         sql.NullBool
+	)
+	err := s.db.QueryRowContext(reqCtx, query, req.Identifier).Scan(
 		&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.BVN, &user.Username, &hashedPassword, &user.AccountId,
 		&mID, &mBusinessName, &mBusinessType, &mTaxID, &mStatus,
 		&mCommissionRate, &mSettlementCycle, &mCreatedAt, &mUpdatedAt,
+		&lDailyLimit, &lSingleTxLimit,
+		&nDevicePush, &nSMS, &nEmail,
 	)
+	user.TransactionLimits.DailyLimit = lDailyLimit.Float64
+	user.TransactionLimits.SingleTransactionLimit = lSingleTxLimit.Float64
+	user.Notifications.DevicePush = nDevicePush.Bool
+	user.Notifications.SMS = nSMS.Bool
+	user.Notifications.Email = nEmail.Bool
+
+	user.Notifications.UserID = user.ID
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -231,7 +256,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var password string = req.Password
+	var password = req.Password
 
 	if s.useEncryptedPassword {
 		decryptedPassword, err := s.hsm.DecryptPII(password)
@@ -287,7 +312,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	deviceID := fmt.Sprintf("%s_%s_%s", req.DeviceInfo.Platform, req.DeviceInfo.Model, req.DeviceInfo.OSVersion)
 
-	token, err := s.generateJWTWithSession(user.ID, merchant, sessionID, deviceID)
+	token, err := s.generateJWTWithSession(reqCtx, user.ID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.login.jwt_failed", "user_id", user.ID, "error", err)
 		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusFailedDependency, nil)
@@ -303,13 +328,14 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	if s.redis != nil {
 		session := map[string]any{
-			"user_id":    fmt.Sprintf("%d", user.ID),
-			"device_id":  deviceID,
-			"expires_at": fmt.Sprintf("%d", time.Now().Add(time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Unix()),
+			"user_id":                fmt.Sprintf("%d", user.ID),
+			"device_id":              deviceID,
+			"expires_at":             fmt.Sprintf("%d", time.Now().Add(refreshTokenExpiry).Unix()),
+			"notificationPreference": user.Notifications,
 		}
 		sessionData, _ := json.Marshal(session)
 		ctx := context.Background()
-		err := s.redis.Set(ctx, constants.SessionKeyPrefix+sessionID, sessionData, time.Duration(viper.GetInt("jwt.expiry_minutes"))*time.Minute).Err()
+		err := s.redis.Set(ctx, constants.SessionKeyPrefix+sessionID, sessionData, refreshTokenExpiry).Err()
 		if err != nil {
 			slog.Error("auth.login.session_store_failed", "error", err)
 		} else {
@@ -349,16 +375,17 @@ func (s *UserService) LogoutUser(w http.ResponseWriter, r *http.Request) {
 		claims := jwt.MapClaims{}
 		jwt.ParseWithClaims(accessToken, claims, func(token *jwt.Token) (any, error) {
 			return []byte(viper.GetString("jwt.secret_key")), nil
-		})
+		}, jwt.WithoutClaimsValidation())
 
 		if sid, ok := claims["sid"].(string); ok {
-			// Delete session — invalidates all tokens bound to this session.
 			s.redis.Del(ctx, constants.SessionKeyPrefix+sid)
 		}
 
-		// Blacklist the access token for its remaining lifetime so in-flight
-		// requests with the same token are rejected immediately.
-		s.blacklistToken(ctx, accessToken, accessTokenExpiry())
+		if exp, ok := claims["exp"].(float64); ok {
+			if ttl := time.Until(time.Unix(int64(exp), 0)); ttl > 0 {
+				s.blacklistToken(ctx, accessToken, ttl)
+			}
+		}
 	}
 
 	utils.SendSuccessResponse(w, "Logout Successful", nil, http.StatusOK)
@@ -430,7 +457,8 @@ func (s *UserService) EditUserProfile(w http.ResponseWriter, r *http.Request) {}
 // @Security BearerAuth
 // @Router /auth [delete]
 func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) {
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+	reqCtx := r.Context()
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, reqCtx)
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	var req struct {
@@ -448,7 +476,7 @@ func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) 
 	// Verify password and confirm account is not already deleted.
 	var hashedPassword string
 	var deletedAt sql.NullTime
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(reqCtx,
 		`SELECT password, deleted_at FROM users WHERE id = $1`, userID,
 	).Scan(&hashedPassword, &deletedAt)
 	if err != nil {
@@ -471,7 +499,7 @@ func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) 
 
 	// Block if any account holds a non-zero balance.
 	var nonZeroBalances int
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(reqCtx,
 		`SELECT COUNT(*) FROM accounts WHERE user_id = $1 AND balance <> 0`, userID,
 	).Scan(&nonZeroBalances); err != nil {
 		slog.Error("auth.delete.balance_check_failed", "user_id", userID, "error", err)
@@ -485,7 +513,7 @@ func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) 
 
 	// Block if any pending or processing transactions exist.
 	var pendingTx int
-	if err := s.db.QueryRow(
+	if err := s.db.QueryRowContext(reqCtx,
 		`SELECT COUNT(*) FROM transactions WHERE user_id = $1 AND status IN ('PENDING', 'PROCESSING')`, userID,
 	).Scan(&pendingTx); err != nil {
 		slog.Error("auth.delete.pending_tx_check_failed", "user_id", userID, "error", err)
@@ -500,7 +528,7 @@ func (s *UserService) DeleteUserProfile(w http.ResponseWriter, r *http.Request) 
 	// Soft delete: stamp deleted_at, set status to inactive, and anonymise PII
 	// so the row satisfies unique constraints for email/phone on future
 	// registrations (handled by the partial unique indexes in migration 032).
-	_, err = s.db.Exec(`
+	_, err = s.db.ExecContext(reqCtx, `
 		UPDATE users
 		SET
 			status           = 'inactive',
@@ -573,11 +601,11 @@ func accessTokenExpiry() time.Duration {
 	return d
 }
 
-func (s *UserService) generateJWTWithSession(userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
+func (s *UserService) generateJWTWithSession(ctx context.Context, userID int, merchant models.Merchant, sessionID, deviceID string) (string, error) {
 	expiry := accessTokenExpiry()
 	now := time.Now()
 
-	isActive, isAdmin, err := s.CheckUserStatusAndPrivileges(strconv.Itoa(userID))
+	isActive, isAdmin, err := s.CheckUserStatusAndPrivileges(ctx, strconv.Itoa(userID))
 
 	if err != nil {
 		slog.Error("auth.check_user_status_failed", "user_id", userID, "error", err)
@@ -645,6 +673,8 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refreshToken" validate:"required"`
 	}
 
+	reqCtx := r.Context()
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Error("refresh_token.decode_failed", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
@@ -679,7 +709,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	// Get user and merchant info
 	var user models.User
 	var mID sql.NullInt64
-	err = s.db.QueryRow(`
+	err = s.db.QueryRowContext(reqCtx, `
 		SELECT u.id, u.email, u.first_name, u.last_name, u.phone_number, u.username, u.account_id, m.id
 		FROM users u LEFT JOIN merchants m ON u.id = m.user_id WHERE u.id = $1
 	`, userID).Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName, &user.PhoneNumber, &user.Username, &user.AccountId, &mID)
@@ -717,7 +747,7 @@ func (s *UserService) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	newAccessToken, err := s.generateJWTWithSession(userID, merchant, sessionID, deviceID)
+	newAccessToken, err := s.generateJWTWithSession(reqCtx, userID, merchant, sessionID, deviceID)
 	if err != nil {
 		slog.Error("auth.refresh.access_token_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, utils.GenerateTokenError, http.StatusInternalServerError, nil)
@@ -875,6 +905,8 @@ func (s *UserService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password" validate:"required,min=6,max=72"`
 	}
 
+	reqCtx := r.Context()
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Error("auth.reset_password.decode_failed", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
@@ -928,7 +960,7 @@ func (s *UserService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec("UPDATE users SET password = $1 WHERE id = $2", hashedPassword, userID)
+	_, err = tx.ExecContext(reqCtx, "UPDATE users SET password = $1 WHERE id = $2", hashedPassword, userID)
 	if err != nil {
 		slog.Error("auth.reset_password.update_failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, utils.PasswordResetError, http.StatusFailedDependency, nil)
@@ -952,12 +984,12 @@ func (s *UserService) ResetPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 // CheckUserStatusAndPrivileges checks both user status and admin privileges in a single query
-func (s *UserService) CheckUserStatusAndPrivileges(userID string) (isActive, isAdmin bool, err error) {
+func (s *UserService) CheckUserStatusAndPrivileges(ctx context.Context, userID string) (isActive, isAdmin bool, err error) {
 	slog.Debug("user.check_status_privileges", "user_id", userID)
 	var status string
 	var adminFlag sql.NullBool
 
-	err = s.db.QueryRow(`
+	err = s.db.QueryRowContext(ctx, `
 	SELECT 
 		u.status, 
 		(a.user_id IS NOT NULL) AS is_admin
@@ -1004,6 +1036,8 @@ func (s *UserService) UserFeedback(w http.ResponseWriter, r *http.Request) {
 		GeneralFeedback  string `json:"generalFeedback" validate:"required,max=1000"`
 	}
 
+	reqCtx := r.Context()
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Error("feedback.decode_failed", "error", err)
@@ -1017,7 +1051,7 @@ func (s *UserService) UserFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(reqCtx, `
 		INSERT INTO user_feedback (email, most_loved_feature, most_hated_feature, nice_have_feature, created_at)
 		VALUES ($1, $2, $3, $4, NOW())
 	`, req.Email, req.MostLovedFeature, req.MostHatedFeature, req.NiceHaveFeature)

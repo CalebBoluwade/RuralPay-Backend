@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -92,20 +93,34 @@ type RotationConfig struct {
 // New creates a JSON slog.Logger writing to stdout and a rotating log file,
 // with PII masking applied to all log records (skipped when dev is true).
 func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig, dev bool) (*slog.Logger, io.Closer, error) {
-	if err := os.MkdirAll(filepath.Dir(logFile), 0750); err != nil {
+	clean := filepath.Clean(logFile)
+	allowedDir := filepath.Clean(filepath.Dir(clean))
+	abs, err := filepath.Abs(clean)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid log file path: %w", err)
+	}
+	allowedAbs, err := filepath.Abs(allowedDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid log directory path: %w", err)
+	}
+	if !strings.HasPrefix(abs, allowedAbs+string(filepath.Separator)) {
+		return nil, nil, fmt.Errorf("log file path %q is outside allowed directory %q", abs, allowedAbs)
+	}
+
+	if err := os.MkdirAll(allowedDir, 0750); err != nil {
 		return nil, nil, err
 	}
 
 	// Create the log file explicitly with 0600 so it is owner-only regardless
 	// of the process umask. lumberjack will reuse the existing file.
-	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(abs, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, nil, err
 	}
 	f.Close()
 
 	rotator := &lumberjack.Logger{
-		Filename:   logFile,
+		Filename:   abs,
 		MaxSize:    rot.MaxSizeMB,
 		MaxBackups: rot.MaxBackups,
 		MaxAge:     rot.MaxAgeDays,

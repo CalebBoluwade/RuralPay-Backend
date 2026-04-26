@@ -1,0 +1,159 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    outputs:
+      test_result: ${{ steps.test.outputs.result }}
+      test_details: ${{ steps.test.outputs.details }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        id: test
+        run: |
+          set +e
+          output=$(go test ./... 2>&1)
+          exit_code=$?
+          echo "details<<EOF" >> $GITHUB_OUTPUT
+          echo "$output" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          if [ $exit_code -eq 0 ]; then
+            echo "result=passed" >> $GITHUB_OUTPUT
+          else
+            echo "result=failed" >> $GITHUB_OUTPUT
+          fi
+          exit $exit_code
+
+  pr-decoration:
+    if: github.event_name == 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check build
+        id: build
+        run: |
+          set +e
+          docker build -t ruralpay-backend:pr-check . > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "result=passed" >> $GITHUB_OUTPUT
+          else
+            echo "result=failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const testResult = '${{ needs.test.outputs.test_result }}';
+            const testDetails = `${{ needs.test.outputs.test_details }}`;
+            const buildResult = '${{ steps.build.outputs.result }}';
+            const testIcon = testResult === 'passed' ? '✅' : '❌';
+            const buildIcon = buildResult === 'passed' ? '✅' : '❌';
+            const overallIcon = (testResult === 'passed' && buildResult === 'passed') ? '🟢' : '🔴';
+            const overallStatus = (testResult === 'passed' && buildResult === 'passed') ? 'Ready to merge' : 'Needs attention';
+
+            const body = [
+              `## ${overallIcon} Deploy Check — ${overallStatus}`,
+              '',
+              '| Check | Status |',
+              '|-------|--------|',
+              `| Tests | ${testIcon} ${testResult} |`,
+              `| Docker Build | ${buildIcon} ${buildResult} |`,
+              '',
+              '<details>',
+              '<summary>Test output</summary>',
+              '',
+              '```',
+              testDetails,
+              '```',
+              '</details>',
+              '',
+              `> Commit: ${{ github.sha }}`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.login === 'github-actions[bot]' && c.body.includes('Deploy Check')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t ruralpay-backend:${{ github.sha }} .
+
+      - name: Save Docker image
+        run: docker save ruralpay-backend:${{ github.sha }} | gzip > ruralpay-backend.tar.gz
+
+      - name: Copy image to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: ruralpay-backend.tar.gz
+          target: /home/${{ secrets.EC2_USER }}/
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker load < ~/ruralpay-backend.tar.gz
+
+            docker stop ruralpay-backend || true
+            docker rm ruralpay-backend || true
+
+            docker run -d \
+              --name ruralpay-backend \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              --env-file /home/${{ secrets.EC2_USER }}/.env \
+              -v /home/${{ secrets.EC2_USER }}/keys:/app/keys:ro \
+              -v /home/${{ secrets.EC2_USER }}/logs:/app/logs \
+              ruralpay-backend:${{ github.sha }}
+
+            docker image prune -f
+            rm ~/ruralpay-backend.tar.gz

@@ -238,6 +238,8 @@ func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	reqCtx := r.Context()
+
 	var req UpdateMerchantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
@@ -249,7 +251,7 @@ func (s *MerchantService) UpdateMerchant(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	result, err := s.db.Exec(`
+	result, err := s.db.ExecContext(reqCtx, `
 		UPDATE merchants 
 		SET business_name = COALESCE(NULLIF($1, ''), business_name),
 		    business_type = COALESCE(NULLIF($2, ''), business_type),
@@ -293,6 +295,8 @@ func (s *MerchantService) UpdateMerchantStatus(w http.ResponseWriter, r *http.Re
 		Status     string `json:"status" validate:"required,oneof=active suspended rejected"`
 	}
 
+	reqCtx := r.Context()
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
@@ -303,7 +307,7 @@ func (s *MerchantService) UpdateMerchantStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	result, err := s.db.Exec("UPDATE merchants SET status = $1, updated_at = NOW() WHERE id = $2", req.Status, req.MerchantID)
+	result, err := s.db.ExecContext(reqCtx, "UPDATE merchants SET status = $1, updated_at = NOW() WHERE id = $2", req.Status, req.MerchantID)
 	if err != nil {
 		slog.Error("merchant.update_status.failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to update merchant status", http.StatusFailedDependency, err)

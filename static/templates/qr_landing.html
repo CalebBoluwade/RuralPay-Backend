@@ -21,7 +21,7 @@
       <p class="section-label">Choose Your Bank To Pay</p>
       <div class="bank-grid">
         {{range .Banks}}
-        <a class="bank-btn" href="#" data-scheme="{{.Scheme}}" data-fallback="{{.FallbackURL}}">
+        <a class="bank-btn" href="#" data-scheme="{{.Scheme}}" data-route="{{.Route}}" data-fallback="{{.FallbackURL}}">
           <img src="/static/bank-logos/{{.Logo}}" alt="{{.Name}}"/>
           <span class="bank-name">{{.Name}}</span>
         </a>

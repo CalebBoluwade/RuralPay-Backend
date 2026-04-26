@@ -54,6 +54,26 @@ type AuthResponse struct {
 	User         User   `json:"user"`                                                           // User information
 }
 
+type Channel string
+
+const (
+	ChannelOTP               Channel = "OTP"
+	ChannelBypass            Channel = "BYPASS"
+	ChannelFacialRecognition Channel = "FACIAL_RECOGNITION"
+)
+
+type UserTransactionLimits struct {
+	DailyLimit             float64 `json:"dailyLimit"`
+	SingleTransactionLimit float64 `json:"singleTransactionLimit"`
+}
+
+type UserNotifications struct {
+	UserID     int  `json:"userId"`
+	SMS        bool `json:"sms"`
+	Email      bool `json:"email"`
+	DevicePush bool `json:"devicePush"`
+}
+
 // User represents the user model
 // @Description User model structure
 
@@ -76,7 +96,9 @@ type User struct {
 	LastLogin           *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
-	FailedLoginAttempts int    `json:"default:0"`
-	KYCStatus           string `json:"kycStatus"`
-	KYCLevel            int    `json:"kycLevel" default:"0"`
+	FailedLoginAttempts int                   `json:"default:0"`
+	TransactionLimits   UserTransactionLimits `json:"transactionLimits"`
+	Notifications       UserNotifications     `json:"notifications"`
+	KYCStatus           string                `json:"kycStatus"`
+	KYCLevel            int                   `json:"kycLevel" default:"0"`
 }

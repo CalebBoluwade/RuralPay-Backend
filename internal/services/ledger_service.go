@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -41,7 +42,7 @@ func (s *DoubleLedgerService) GenerateInternalTransactionID() string {
 	return fmt.Sprintf("TX%x", hashed[:8])
 }
 
-func (s *DoubleLedgerService) Transfer(fromAccountID, toAccountID, transactionId string, amount int64) error {
+func (s *DoubleLedgerService) Transfer(ctx context.Context, fromAccountID, toAccountID, transactionId string, amount int64) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -52,7 +53,7 @@ func (s *DoubleLedgerService) Transfer(fromAccountID, toAccountID, transactionId
 		return err
 	}
 
-	if err := s.TransferTx(tx, fromAccountID, toAccountID, transactionId, amount); err != nil {
+	if err := s.TransferTx(ctx, tx, fromAccountID, toAccountID, transactionId, amount); err != nil {
 		s.appendPaymentState(tx, transactionId, "FAILED")
 		return err
 	}
@@ -108,13 +109,13 @@ func (s *DoubleLedgerService) Reverse(transactionId string) error {
 		}
 
 		reversalAmount := -e.amount
-		reversalType := "CREDIT"
+		reversalType := models.CreditPayment
 		if e.entryType == "CREDIT" {
-			reversalType = "DEBIT"
+			reversalType = models.DebitPayment
 		}
 		newBalance := account.Balance + reversalAmount
 
-		if err := s.createLedgerEntry(tx, transactionId+"_REVERSAL", e.accountID, reversalAmount, reversalType, newBalance); err != nil {
+		if err := s.createLedgerEntry(context.Background(), tx, transactionId+"_REVERSAL", e.accountID, reversalAmount, reversalType, newBalance); err != nil {
 			return err
 		}
 
@@ -130,7 +131,7 @@ func (s *DoubleLedgerService) Reverse(transactionId string) error {
 	return tx.Commit()
 }
 
-func (s *DoubleLedgerService) TransferTx(tx *sql.Tx, fromAccountID, toAccountID, transactionId string, amount int64) error {
+func (s *DoubleLedgerService) TransferTx(ctx context.Context, tx *sql.Tx, fromAccountID, toAccountID, transactionId string, amount int64) error {
 	// Lock accounts in consistent order to prevent deadlocks
 	firstLock, secondLock := fromAccountID, toAccountID
 	if fromAccountID > toAccountID {
@@ -156,11 +157,11 @@ func (s *DoubleLedgerService) TransferTx(tx *sql.Tx, fromAccountID, toAccountID,
 		return fmt.Errorf("insufficient balance")
 	}
 
-	if err := s.createLedgerEntry(tx, transactionId, fromAccount.ID, -amount, "DEBIT", fromAccount.Balance-amount); err != nil {
+	if err := s.createLedgerEntry(context.Background(), tx, transactionId, fromAccount.ID, -amount, models.DebitPayment, fromAccount.Balance-amount); err != nil {
 		return err
 	}
 
-	if err := s.createLedgerEntry(tx, transactionId, toAccount.ID, amount, "CREDIT", toAccount.Balance+amount); err != nil {
+	if err := s.createLedgerEntry(context.Background(), tx, transactionId, toAccount.ID, amount, models.CreditPayment, toAccount.Balance+amount); err != nil {
 		return err
 	}
 
@@ -195,8 +196,8 @@ func (s *DoubleLedgerService) lockAccount(tx *sql.Tx, accountID string) (*models
 	return &account, err
 }
 
-func (s *DoubleLedgerService) createLedgerEntry(tx *sql.Tx, transactionId, accountID string, amount int64, entryType string, balance int64) error {
-	_, err := tx.Exec(`
+func (s *DoubleLedgerService) createLedgerEntry(ctx context.Context, tx *sql.Tx, transactionId, accountID string, amount int64, entryType models.PaymentType, balance int64) error {
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO ledger_entries (transaction_id, account_id, amount, entry_type, balance, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
 		transactionId, accountID, amount, entryType, balance, time.Now())

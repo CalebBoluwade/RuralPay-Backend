@@ -30,7 +30,7 @@ const (
 	TransactionStatusPending       TransactionStatus = "PENDING"
 	TransactionStatusSuccess       TransactionStatus = "COMPLETED"
 	TransactionStatusFailed        TransactionStatus = "FAILED"
-	TransactionStatusCancelled     TransactionStatus = "Cancelled"
+	TransactionStatusCancelled     TransactionStatus = "CANCELLED"
 	TransactionSettlementFailed    TransactionStatus = "FAILED_SETTLEMENT"
 	TransactionStatusISOCONVFailed TransactionStatus = "FAILED_ISO_CONVERSION"
 )
@@ -61,8 +61,9 @@ type PaymentRequest struct {
 	PaymentMode              PaymentMode `json:"paymentMode"`
 	SaveBeneficiary          bool        `json:"saveBeneficiary"`
 	OneTimeCode              string      `json:"oneTimeCode" validate:"required,len=8,numeric"`
-	TwoFAType                string      `json:"twoFAType" validate:"required,oneof=BYPASS,OTP,BIOMETRIC"`
+	TwoFAType                string      `json:"twoFAType" validate:"required,oneof=BYPASS OTP BIOMETRIC"`
 	Location                 *Location   `json:"location,omitempty"`
+	IPAddress                string      `json:"IPAddress,omitempty"`
 }
 
 type PaymentResponse struct {
@@ -124,4 +125,12 @@ type TransactionRecord struct {
 	UpdatedAt     time.Time         `json:"updated_at" db:" updated_at"`
 	SettledAt     *time.Time        `json:"settled_at" db:"settled_at"`
 	ProcessedAt   *time.Time        `json:"processed_at" db:"processed_at"`
+}
+
+type AuditEvent struct {
+	Timestamp time.Time       `json:"timestamp"`
+	EventType string          `json:"event_type"`
+	TxRequest *PaymentRequest `json:"request"`
+	Error     string          `json:"error,omitempty"`
+	Details   map[string]any  `json:"details"`
 }

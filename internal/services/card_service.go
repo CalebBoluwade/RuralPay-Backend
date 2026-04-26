@@ -39,7 +39,7 @@ func NewCardService(db *sql.DB, hsm hsm.HSMInterface) *CardService {
 	return &CardService{
 		db:          db,
 		hsm:         hsm,
-		bankService: NewBankService(),
+		bankService: NewBankService(db),
 		validator:   NewValidationHelper(),
 	}
 }

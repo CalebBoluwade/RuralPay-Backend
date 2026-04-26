@@ -1,6 +1,5 @@
 -- Cards table for NFC card management
 CREATE TABLE IF NOT EXISTS cards (
-    id SERIAL PRIMARY KEY,
     card_id VARCHAR(255) UNIQUE NOT NULL,
     user_id INTEGER NOT NULL REFERENCES users(id),
     serial_number VARCHAR(255) UNIQUE NOT NULL,

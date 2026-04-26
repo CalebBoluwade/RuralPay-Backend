@@ -117,7 +117,7 @@ func TestSendErrorResponse(t *testing.T) {
 		var response utils.APIErrorResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		assert.NoError(t, err)
-		assert.Equal(t, utils.InvalidRequestError, response.Error)
+		assert.Equal(t, string(utils.InvalidRequestError), response.Error)
 	})
 
 	t.Run("unauthorized error", func(t *testing.T) {

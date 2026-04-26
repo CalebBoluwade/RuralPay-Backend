@@ -25,14 +25,21 @@ func NewISO20022CallbackHandler(isoSvc *services.ISO20022Service) *ISO20022Callb
 // decryptBody reads the request body and, if keys are configured, verifies and decrypts
 // the SignedMessage envelope. Falls back to the raw body when keys are not present.
 func (h *ISO20022CallbackHandler) decryptBody(r *http.Request) ([]byte, error) {
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		return nil, err
-	}
+	limited := io.LimitReader(r.Body, 1<<20)
+
+	// Attempt to decode as a SignedMessage envelope with strict field checking.
 	var msg utils.SignedMessage
-	if err := json.Unmarshal(raw, &msg); err != nil || msg.EncryptedPayload == nil {
+	dec := json.NewDecoder(limited)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&msg); err != nil || msg.EncryptedPayload == nil {
+		// Not a SignedMessage — re-read the raw body for direct XML processing.
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			return nil, err
+		}
 		return raw, nil
 	}
+
 	xmlData, err := h.isoSvc.VerifyAndOpenXML(&msg)
 	if err != nil {
 		return nil, err

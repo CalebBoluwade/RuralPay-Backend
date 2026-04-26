@@ -6,11 +6,23 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/ruralpay/backend/internal/utils"
 )
+
+// sanitizeLog strips control characters from a string to prevent log injection.
+func sanitizeLog(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // RateLimitConfig defines the limit and window for a rate limiter tier.
 type RateLimitConfig struct {
@@ -35,14 +47,14 @@ var (
 func RateLimiter(rdb *redis.Client, cfg RateLimitConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := realIP(r)
+			ip := utils.RealIP(r)
 			key := fmt.Sprintf("rl:%s:%s", r.URL.Path, ip)
 
 			count, err := increment(r.Context(), rdb, key, cfg.Window)
 			if err != nil {
 				// Redis unavailable — fail open to avoid blocking legitimate traffic,
 				// but log so ops can act.
-				slog.Error("rate_limiter.redis_error", "path", r.URL.Path, "ip", ip, "error", err)
+				slog.Error("rate_limiter.redis_error", "path", sanitizeLog(r.URL.Path), "ip", sanitizeLog(ip), "error", err)
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -57,7 +69,7 @@ func RateLimiter(rdb *redis.Client, cfg RateLimitConfig) func(http.Handler) http
 			w.Header().Set("X-RateLimit-Window", cfg.Window.String())
 
 			if count > cfg.Limit {
-				slog.Warn("rate_limiter.exceeded", "path", r.URL.Path, "ip", ip, "count", count, "limit", cfg.Limit)
+				slog.Warn("rate_limiter.exceeded", "path", sanitizeLog(r.URL.Path), "ip", sanitizeLog(ip), "count", count, "limit", cfg.Limit)
 				w.Header().Set("Retry-After", strconv.Itoa(int(cfg.Window.Seconds())))
 				utils.SendErrorResponse(w, "Too many requests, please try again later", http.StatusTooManyRequests, nil)
 				return
@@ -78,13 +90,4 @@ func increment(ctx context.Context, rdb *redis.Client, key string, window time.D
 		return 0, err
 	}
 	return int(incr.Val()), nil
-}
-
-// realIP extracts the client IP, respecting the X-Real-IP header set by
-// chi's RealIP middleware upstream.
-func realIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	return r.RemoteAddr
 }

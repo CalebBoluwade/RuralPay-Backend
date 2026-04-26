@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/moov-io/iso20022/pkg/pacs_v08"
 	"github.com/moov-io/iso8583"
 	"github.com/ruralpay/backend/internal/circuitbreaker"
@@ -38,6 +39,8 @@ type NIBSSClient struct {
 	componentKey2 []byte
 
 	iso8583Service *ISO8583Service
+	NameEnquiry    NameEnquiryService
+	FundsTransfer  FundsTransferService
 
 	httpClient            *http.Client
 	circuitBreaker        *gobreaker.CircuitBreaker
@@ -52,44 +55,6 @@ type NIBSSClient struct {
 	cardSettlementTimeout time.Duration
 }
 
-func (c *NIBSSClient) VerifyAccountIdentification(ctx context.Context, xmlData []byte) (*models.IdentificationVerificationResponse, error) {
-	// Create a child context with ACMT timeout
-	opCtx, cancel := context.WithTimeout(ctx, c.acmtTimeout)
-	defer cancel()
-
-	body, err := c.iso20022Breaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(opCtx, "POST", c.acmtURL, bytes.NewBuffer(xmlData))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create acmt.023 request: %w", err)
-		}
-		req.Header.Set(constants.ContentType, constants.XMLContentType)
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("acmt.023 request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("NIBSS acmt.023 API returned status %d", resp.StatusCode)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("NIBSS acmt.023 API returned status %d", resp.StatusCode)
-		}
-
-		var idResp models.IdentificationVerificationResponse
-		if err := xml.NewDecoder(resp.Body).Decode(&idResp); err != nil {
-			return nil, fmt.Errorf("failed to decode acmt.024 response: %w", err)
-		}
-		return &idResp, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return body.(*models.IdentificationVerificationResponse), nil
-}
-
 func fallback(primary, fallbackURL string) string {
 	if primary != "" {
 		return primary
@@ -97,7 +62,7 @@ func fallback(primary, fallbackURL string) string {
 	return fallbackURL
 }
 
-func NewNIBSSClient() *NIBSSClient {
+func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
 	nibssBase := viper.GetString("nibss.base_url")
 
 	// Load timeout configurations with sensible defaults (in seconds)
@@ -117,13 +82,13 @@ func NewNIBSSClient() *NIBSSClient {
 	componentKey1Hex := viper.GetString("nibss.iso8583.component_key_1")
 	componentKey1, err := hex.DecodeString(componentKey1Hex)
 	if err != nil {
-		slog.Error("failed to decode nibss.iso8583.component_key_1: %w", err)
+		slog.Error("failed to decode nibss.iso8583.component_key_1", "error", err)
 	}
 
 	componentKey2Hex := viper.GetString("nibss.iso8583.component_key_2")
 	componentKey2, err := hex.DecodeString(componentKey2Hex)
 	if err != nil {
-		slog.Error("failed to decode nibss.iso8583.component_key_2: %w", err)
+		slog.Error("failed to decode nibss.iso8583.component_key_2", "error", err)
 	}
 
 	return &NIBSSClient{
@@ -135,13 +100,14 @@ func NewNIBSSClient() *NIBSSClient {
 		acmtURL:        fallback(iso20022BaseURL+"/nps/acmt", nibssBase),
 		painURL:        fallback(iso20022BaseURL+"/nps/pain", nibssBase),
 
-		//sslCertPath: viper.GetString("iso8583.ssl_cert_path"),
-		//sslKeyPath:  viper.GetString("iso8583.ssl_key_path"),
-
 		componentKey1: componentKey1,
 		componentKey2: componentKey2,
 
 		apiKey: viper.GetString("nibss.api_key"),
+
+		// iso8583Service: NewISO8583Service(),
+		FundsTransfer: NewFundsTransferService(redis),
+		NameEnquiry:   NewNameEnquiryService(redis),
 
 		httpClient: &http.Client{
 			Timeout: getTimeout("nibss.http_timeout", 30),

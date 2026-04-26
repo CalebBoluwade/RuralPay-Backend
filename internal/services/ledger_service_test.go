@@ -23,14 +23,18 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectBegin()
 
-		// Lock from account
-		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE id = \\$1 FOR UPDATE").
+		// appendPaymentState PENDING
+		mock.ExpectExec("INSERT INTO payment_states").
+			WithArgs(transactionId, "PENDING", sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		// Lock accounts (account1 < account2, so account1 locked first)
+		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE account_id = \\$1 LIMIT 1 FOR UPDATE").
 			WithArgs(fromAccountID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "balance", "version", "updated_at"}).
 				AddRow(fromAccountID, 5000, 1, time.Now()))
 
-		// Lock to account
-		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE id = \\$1 FOR UPDATE").
+		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE account_id = \\$1 LIMIT 1 FOR UPDATE").
 			WithArgs(toAccountID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "balance", "version", "updated_at"}).
 				AddRow(toAccountID, 2000, 1, time.Now()))
@@ -55,6 +59,11 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 			WithArgs(3000, sqlmock.AnyArg(), toAccountID, 1).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
+		// appendPaymentState SUCCESS
+		mock.ExpectExec("INSERT INTO payment_states").
+			WithArgs(transactionId, "SUCCESS", sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
 		mock.ExpectCommit()
 
 		err := service.Transfer(fromAccountID, toAccountID, transactionId, amount)
@@ -70,17 +79,26 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectBegin()
 
-		// Lock from account with insufficient balance
-		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE id = \\$1 FOR UPDATE").
+		// appendPaymentState PENDING
+		mock.ExpectExec("INSERT INTO payment_states").
+			WithArgs(transactionId, "PENDING", sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+
+		// Lock accounts
+		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE account_id = \\$1 LIMIT 1 FOR UPDATE").
 			WithArgs(fromAccountID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "balance", "version", "updated_at"}).
 				AddRow(fromAccountID, 5000, 1, time.Now()))
 
-		// Lock to account
-		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE id = \\$1 FOR UPDATE").
+		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE account_id = \\$1 LIMIT 1 FOR UPDATE").
 			WithArgs(toAccountID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "balance", "version", "updated_at"}).
 				AddRow(toAccountID, 2000, 1, time.Now()))
+
+		// appendPaymentState FAILED
+		mock.ExpectExec("INSERT INTO payment_states").
+			WithArgs(transactionId, "FAILED", sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(1, 1))
 
 		mock.ExpectRollback()
 
@@ -108,7 +126,7 @@ func TestDoubleLedgerService_lockAccount(t *testing.T) {
 		tx, _ := db.Begin()
 		accountID := "account1"
 
-		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE id = \\$1 FOR UPDATE").
+		mock.ExpectQuery("SELECT id, balance, version, updated_at FROM accounts WHERE account_id = \\$1 LIMIT 1 FOR UPDATE").
 			WithArgs(accountID).
 			WillReturnRows(sqlmock.NewRows([]string{"id", "balance", "version", "updated_at"}).
 				AddRow(accountID, 5000, 1, time.Now()))

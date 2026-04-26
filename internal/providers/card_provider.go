@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
@@ -32,7 +31,7 @@ func NewCardPaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSM
 	return &CardPaymentProvider{
 		BasePaymentProvider: NewBasePaymentProvider(db, redis, hsmInstance),
 		iso8583Service:      services.NewISO8583Service(db, hsmInstance),
-		nibssClient:         services.NewNIBSSClient(),
+		// nibssClient:         services.NewNIBSSClient(),
 	}
 }
 
@@ -104,64 +103,31 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}
 	defer tx.Rollback()
 
-	// Generate HSM signature for the transaction
-	timestamp := time.Now()
-	nonce := uuid.New().String()
-
-	hsmTx := &hsm.Transaction{
-		ID:            req.TransactionID,
-		FromAccountID: req.FromAccount,
-		ToAccountID:   req.BeneficiaryAccountNumber,
-		Amount:        float64(req.Amount),
-		Timestamp:     timestamp,
-		Nonce:         nonce,
-	}
-	signature, err := p.HSM.SignTransaction(hsmTx)
-	if err != nil {
-		slog.Error("card.process.sign_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, errors.New("security signing failed")
-	}
-
 	slog.Info("card.process.inserting", "tx_id", req.TransactionID)
 
-	// Encrypt PAN for storage in debit_id
-	encryptedPAN, err := p.HSM.EncryptPAN(req.FromAccount)
-	if err != nil {
-		slog.Error("card.process.pan_encrypt_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, errors.New("failed to secure card data")
+	event := models.AuditEvent{
+		Timestamp: time.Now(),
+		EventType: "TRANSFER",
+		TxRequest: req,
+		Details: map[string]interface{}{
+			"merchantID": cardReq.MerchantID,
+		},
 	}
 
-	// Resolve merchant account_id for credit side
-	var merchantAccountID string
-	err = tx.QueryRowContext(ctx, `SELECT account_id FROM merchants WHERE id = $1`, cardReq.MerchantID).Scan(&merchantAccountID)
-	if err != nil {
-		slog.Error("card.process.merchant_lookup_failed", "tx_id", req.TransactionID, "merchant_id", cardReq.MerchantID, "error", err)
-		return nil, errors.New("merchant not found")
+	if p.Audit.LogTransaction(ctx, tx, event); err != nil {
+		slog.ErrorContext(ctx, "card.audit.log.failed", "tx_id", req.TransactionID, "error", err)
+
+		return &models.PaymentResponse{
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.InternalServiceError,
+			PaymentMode:   models.PaymentModeCard,
+			Timestamp:     time.Now(),
+		}, errors.New(string(utils.InternalServiceError))
 	}
 
-	// Update metadata with signing info
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
-	}
-	req.Metadata["signing_nonce"] = nonce
-	req.Metadata["signing_timestamp"] = timestamp
-	metadataJSON, _ := json.Marshal(req.Metadata)
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO transactions
-		(transaction_id, debit_id, credit_id, amount, total_amount, type, payment_mode, status, user_id, created_at, signature, metadata)
-		VALUES ($1, $2, $3, $4, $4, 'DEBIT', 'CARD', 'COMPLETED', $5, NOW(), $6, $7)
-	`, req.TransactionID, encryptedPAN, merchantAccountID, req.Amount, req.UserID, signature, metadataJSON)
-
-	if err != nil {
-		slog.Error("card.process.insert_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		slog.Error("card.process.commit_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, err
-	}
+	slog.InfoContext(ctx, "bank_transfer.audit.log.success", "tx_id", req.TransactionID)
 
 	// Build ISO 0800 message for key exchange
 	cardISO0800, err := p.iso8583Service.BuildISO0800Message()
@@ -260,7 +226,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 	}
 
 	respJSON, _ := json.Marshal(resp)
-	p.DB.Exec(`UPDATE transactions SET settlement_response = $1, updated_at = NOW() WHERE transaction_id = $2`, respJSON, req.TransactionID)
+	p.DB.ExecContext(ctx, `UPDATE transactions SET settlement_response = $1, updated_at = NOW() WHERE transaction_id = $2`, respJSON, req.TransactionID)
 
 	slog.Info("card.process.success", "tx_id", req.TransactionID)
 	return &models.PaymentResponse{
@@ -340,13 +306,14 @@ func (p *CardPaymentProvider) HandlePayment(w http.ResponseWriter, r *http.Reque
 		BeneficiaryAccountNumber: decryptedPAN,
 		Amount:                   cardReq.Amount,
 		PaymentMode:              models.PaymentModeCard,
+
 		Metadata: map[string]any{
 			"cardPaymentRequest": &cardReq,
 		},
 		Location: cardReq.Location,
 	}
 
-	response, err := p.ProcessPayment(r.Context(), req)
+	response, err := p.ProcessPayment(ctx, req)
 	if err != nil {
 		slog.Error("handle.card.payment.failed", "tx_id", req.TransactionID, "err", err)
 		p.setIdempotency(req.TransactionID, models.TransactionStatusFailed)

@@ -70,7 +70,7 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 	}
 
 	emvData := s.buildEMVCoQR(qrToken)
-	slog.Info("qr.generate.emvco_built")
+	slog.DebugContext(ctx, "qr.generate.emvco_built")
 	qr, err := qrcode.New(emvData, qrcode.Highest)
 	if err != nil {
 		slog.Error("qr.generate.error", "error", err)
@@ -95,7 +95,7 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 }
 
 func (s *QRService) addLogoToQR(qrImg image.Image) (image.Image, error) {
-	logoPath := "./static/bank-logos/nibss.png"
+	logoPath := "./static/bank-logos/RuralPay.png"
 	file, err := os.Open(logoPath)
 	if err != nil {
 		return qrImg, nil
@@ -107,7 +107,7 @@ func (s *QRService) addLogoToQR(qrImg image.Image) (image.Image, error) {
 		return qrImg, nil
 	}
 
-	logoSize := qrImg.Bounds().Dx() / 7
+	logoSize := qrImg.Bounds().Dx() / 5
 	bgSize := logoSize + 16
 	limeGreen := color.RGBA{50, 205, 50, 255}
 	radius := float64(bgSize) / 2
@@ -250,7 +250,7 @@ func (s *QRService) buildEMVCoQR(token string) string {
 	payloadFormatIndicator := "000201"
 	pointOfInitiation := "010212"
 
-	appDomain := viper.GetString("app.domain")
+	appDomain := viper.GetString("app.base_url")
 	if appDomain == "" {
 		appDomain = "app.ruralpay.com"
 	}
@@ -259,6 +259,8 @@ func (s *QRService) buildEMVCoQR(token string) string {
 		appRoute = "pay/qr"
 	}
 	deepLink := fmt.Sprintf("https://%s/%s?token=%s", appDomain, appRoute, token)
+
+	slog.Debug("qr.build_emvco", "deepLink", deepLink)
 
 	merchantID := viper.GetString("emvco.merchant_id")
 	if merchantID == "" {

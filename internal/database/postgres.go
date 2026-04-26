@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/lib/pq"
 	"github.com/spf13/viper"
@@ -50,6 +52,16 @@ func GetConfig() *DBConfig {
 	}
 }
 
+// sanitizeLogValue strips control characters from a string to prevent log injection.
+func sanitizeLogValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 const (
 	maxRetries   = 5
 	initialDelay = 5 * time.Second
@@ -83,12 +95,12 @@ func InitDB() (*sql.DB, error) {
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
-		slog.Error("Failed to open database", "error", err)
+		slog.Error("Failed to open database", "error", sanitizeLogValue(err.Error()))
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
 	if err = connectWithRetry(db); err != nil {
-		slog.Error("Failed to connect to database", "error", err)
+		slog.Error("Failed to connect to database", "error", sanitizeLogValue(err.Error()))
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 

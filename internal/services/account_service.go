@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
@@ -31,7 +32,7 @@ type AccountService struct {
 	bankService     *BankService
 	ussdService     *USSDService
 	notificationSVC *NotificationService
-	isoService      *ISO20022Service
+	// nameEnquiry     NameEnquiryService
 }
 
 type LinkAccountRequest struct {
@@ -50,33 +51,51 @@ type LinkedAccount struct {
 	IsPrimary     bool   `json:"isPrimary"`
 }
 
+// sanitizeLog strips control characters to prevent log injection.
+func sanitizeAcct(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func NewAccountService(db *sql.DB, redisClient *redis.Client) *AccountService {
 	return &AccountService{
 		db:              db,
 		redis:           redisClient,
-		nibssClient:     NewNIBSSClient(),
+		nibssClient:     NewNIBSSClient(redisClient),
 		validator:       validator.New(),
-		bankService:     NewBankService(),
+		bankService:     NewBankService(db),
 		qrService:       NewQRService(db, redisClient),
 		notificationSVC: NewNotificationService(db),
-		isoService:      NewISO20022Service(),
+		// nameEnquiry:     NewNameEnquiryService(),
 	}
 }
 
 func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.LinkAccount.start")
+	slog.Info("Account.Link_Account.Start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	var req LinkAccountRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		slog.Error("account.LinkAccount.decode_error", "error", err)
+	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		slog.Error("Account.Link_Account.Decode_Error", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		slog.Warn("Account.Link_Account.Multiple_Json_Objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
+		return
+	}
 
-	mandateResp, err := s.nibssClient.GetAccountMandate(r.Context(), req.BankCode, req.AccountNumber)
+	mandateResp, err := s.nibssClient.NameEnquiry.EnquireName(r.Context(), req.AccountNumber, req.BankCode)
 	if err != nil {
-		slog.Error("account.link.nibss_failed", "error", err)
+		slog.Error("Account.Link_Account.Name_Enquiry_Failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to Verify Account", http.StatusBadGateway, nil)
 		return
 	}
@@ -94,7 +113,7 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		userID, req.IsPrimary, mandateResp.AccountName, req.AccountNumber, mandateResp.BankName, req.BankCode,
 	).Scan(&accountID)
 	if err != nil {
-		slog.Error("account.link.insert_failed", "error", err)
+		slog.Error("Account.Link_Account.Insert_Failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to Link Account", http.StatusFailedDependency, nil)
 		return
 	}
@@ -108,43 +127,43 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		BankCode:      req.BankCode,
 		IsPrimary:     req.IsPrimary,
 	}
-	slog.Info("account.LinkAccount.success", "account_id", accountID)
+	slog.Info("Account.Link_Account.Success", "account_id", accountID)
 	utils.SendSuccessResponse(w, "Account Linked Successfully", response, http.StatusOK)
 }
 
 func (s *AccountService) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
-	slog.Info("unlink.account.start")
+	slog.Info("Account.Unlink_Account.Start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 	accountId := chi.URLParam(r, "accountNumber")
 
 	if accountId == "" {
-		slog.Warn("unlink.account.missing_account_id")
+		slog.Warn("Account.Unlink_Account.Missing_Account_ID")
 		utils.SendErrorResponse(w, "Account Number Is Required", http.StatusBadRequest, nil)
 		return
 	}
 
 	rows, err := s.db.QueryContext(r.Context(), `UPDATE accounts SET status = 0 WHERE user_id = $1 AND account_id = $2 RETURNING id`, userID, accountId)
 	if err != nil {
-		slog.Error("account.link.insert_failed", "error", err)
-		utils.SendErrorResponse(w, "Failed to Link Account", http.StatusFailedDependency, nil)
+		slog.Error("Account.Unlink_Account.Update_Failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Unlink Account", http.StatusFailedDependency, nil)
 		return
 	}
 	defer rows.Close()
 
 	if !rows.Next() {
-		slog.Warn("unlink.account.not_found")
+		slog.Warn("Account.Unlink_Account.Account_Not_Found", "account_id", accountId)
 		utils.SendErrorResponse(w, "Account Not Found", http.StatusNotFound, nil)
 		return
 	}
 
 	var id int64
 	if err := rows.Scan(&id); err != nil {
-		slog.Error("account.unlink.scan_failed", "error", err)
+		slog.Error("Account.Unlink_Account.Scan_Failed", "error", err)
 		utils.SendErrorResponse(w, "Failed to Unlink Account", http.StatusFailedDependency, nil)
 		return
 	}
 
-	slog.Info("unlink.account.success", "account_id", accountId)
+	slog.Info("Account.Unlink_Account.Success", "account_id", accountId)
 	utils.SendSuccessResponse(w, "Account Unlinked Successfully", nil, http.StatusOK)
 }
 
@@ -162,24 +181,24 @@ func (s *AccountService) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
 // @Security BearerAuth
 // @Router /account/name-enquiry [get]
 func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.name.enquiry.start")
+	slog.Info("Account.Name_Enquiry.Start")
 	accountId := strings.TrimSpace(r.URL.Query().Get("accountId"))
 	bankCode := strings.TrimSpace(r.URL.Query().Get("bankCode"))
 
 	if accountId == "" {
-		slog.Warn("account.name.enquiry.missing_account_id")
+		slog.Warn("Account.Name_Enquiry.Missing_Account_ID", "account_id", accountId)
 		utils.SendErrorResponse(w, "Account Number Is Required", http.StatusBadRequest, nil)
 		return
 	}
 
 	if !IsValidAccountId(accountId) {
-		slog.Warn("account.name.enquiry.invalid_account_id", "account_id", accountId)
+		slog.Warn("Account.Name_Enquiry.Invalid_Account_ID", "account_id", sanitizeAcct(accountId))
 		utils.SendErrorResponse(w, "invalid Account Number format", http.StatusBadRequest, nil)
 		return
 	}
 
 	if bankCode != "" && !IsValidBankCode(bankCode) {
-		slog.Warn("account.name.enquiry.invalid_bank_code", "bank_code", bankCode)
+		slog.Warn("Account.Name_Enquiry.Invalid_Bank_Code", "bank_code", sanitizeAcct(bankCode))
 		utils.SendErrorResponse(w, "invalid bankCode format", http.StatusBadRequest, nil)
 		return
 	}
@@ -187,7 +206,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 	// Check virtual accounts in Redis first
 	if s.redis != nil {
 		if vaData, err := ValidateVirtualAccount(s.redis, accountId); err == nil {
-			slog.Info("account.name.enquiry.virtual_account_found", "account_id", accountId)
+			slog.Info("Account.Name_Enquiry.Virtual_Account_Found", "account_id", sanitizeAcct(accountId))
 			utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 				"accountId":   accountId,
 				"accountName": vaData.AccountName,
@@ -207,12 +226,12 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 
 	if err == nil {
 		if status != "ACTIVE" {
-			slog.Warn("account.name.enquiry.account_not_active", "account_id", accountId, "status", status)
+			slog.Warn("Account.Name_Enquiry.Account_Not_Active", "account_id", sanitizeAcct(accountId), "status", status)
 			utils.SendErrorResponse(w, "Account Not Active", http.StatusUnprocessableEntity, nil)
 			return
 		}
 
-		slog.Info("account.name.enquiry.local_account_found", "account_id", accountId)
+		slog.Info("Account.Name_Enquiry.Local_Account_Found", "account_id", sanitizeAcct(accountId))
 		utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 			"accountId":   accountId,
 			"accountName": accountName,
@@ -222,47 +241,25 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Info("account.name.enquiry.account_not_found_locally", "account_id", accountId, "bank_code", bankCode)
+	slog.Info("Account.Name_Enquiry.Account_Not_Found_Locally", "account_id", sanitizeAcct(accountId), "bank_code", sanitizeAcct(bankCode))
 
 	if bankCode == "" {
-		slog.Warn("account.name.enquiry.no_bank_code_for_switch_lookup", "account_id", accountId)
+		slog.Warn("Account.Name_Enquiry.No_Bank_Code_For_Switch_Lookup", "account_id", sanitizeAcct(accountId))
 		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
 		return
 	}
 
-	acmt023, err := s.isoService.CreateAcmt023(accountId, bankCode)
+	neResult, err := s.nibssClient.NameEnquiry.EnquireName(r.Context(), accountId, bankCode)
 	if err != nil {
-		slog.Error("account.name.enquiry.acmt023_build_failed", "error", err)
+		slog.Error("Account.Name_Enquiry.External_Failed", "error", err, "account_id", sanitizeAcct(accountId))
 		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
 		return
 	}
 
-	xmlData, err := s.isoService.ConvertToXML(acmt023)
-	if err != nil {
-		slog.Error("account.name.enquiry.acmt023_xml_failed", "error", err)
-		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
-		return
-	}
-
-	slog.Debug("account.name.enquiry.xml", "xml", xmlData)
-
-	idResp, err := s.nibssClient.VerifyAccountIdentification(r.Context(), []byte(xmlData))
-	if err != nil {
-		slog.Error("account.name.enquiry.acmt023_nibss_failed", "error", err)
-		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
-		return
-	}
-
-	if !idResp.Verified {
-		slog.Warn("account.name.enquiry.acmt023_not_verified", "account_id", accountId)
-		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
-		return
-	}
-
-	slog.Info("account.name.enquiry.acmt023_found", "account_id", accountId)
+	slog.Info("Account.Name_Enquiry.External_Found", "account_id", sanitizeAcct(accountId))
 	utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 		"accountId":   accountId,
-		"accountName": idResp.AccountName,
+		"accountName": neResult.AccountName,
 		"source":      "External",
 	}, http.StatusOK)
 }
@@ -278,7 +275,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 // @Security BearerAuth
 // @Router /account/balance-enquiry [get]
 func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.balance.enquiry.start")
+	slog.Info("Account.Balance_Enquiry.Start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
 	// userID is already an int, no need to convert
@@ -365,10 +362,10 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 // @Security BearerAuth
 // @Router /account/virtual-account [get]
 func (s *AccountService) GetVirtualAccount(w http.ResponseWriter, r *http.Request) {
-	slog.Info("account.GetVirtualAccount.start")
+	slog.Info("Account.GetVirtualAccount.Start")
 	_, merchantID := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 	if merchantID == 0 {
-		slog.Warn("account.GetVirtualAccount.not_a_merchant")
+		slog.Warn("Account.GetVirtualAccount.Not_A_Merchant", "merchant_id", merchantID)
 		utils.SendErrorResponse(w, "Only Merchants Generate Virtual Accounts", http.StatusUnprocessableEntity, nil)
 		return
 	}
@@ -378,18 +375,18 @@ func (s *AccountService) GetVirtualAccount(w http.ResponseWriter, r *http.Reques
 	var merchantName, status string
 	err := s.db.QueryRow("SELECT business_name, status FROM merchants WHERE id = $1", merchantIDStr).Scan(&merchantName, &status)
 	if errors.Is(err, sql.ErrNoRows) {
-		slog.Warn("account.virtual_account.merchant_not_found", "merchant_id", merchantIDStr)
+		slog.Warn("Account.VirtualAccount.Merchant_Not_Found", "merchant_id", merchantIDStr)
 		utils.SendErrorResponse(w, "Merchant Not Found", http.StatusUnprocessableEntity, nil)
 		return
 	}
 	if err != nil {
-		slog.Error("account.virtual_account.db_error", "merchant_id", merchantIDStr, "error", err)
+		slog.Error("Account.VirtualAccount.DB_Error", "merchant_id", merchantIDStr, "error", err)
 		utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
 		return
 	}
 
 	if status != "ACTIVE" {
-		slog.Warn("account.virtual_account.merchant_inactive", "merchant_id", merchantIDStr, "status", status)
+		slog.Warn("Account.VirtualAccount.Merchant_Inactive", "merchant_id", merchantIDStr, "status", status)
 		utils.SendErrorResponse(w, "Merchant Not Active", http.StatusUnprocessableEntity, nil)
 		return
 	}
@@ -418,16 +415,16 @@ func (s *AccountService) GetVirtualAccount(w http.ResponseWriter, r *http.Reques
 		key := fmt.Sprintf("va:%s", accountNumber)
 		data, _ := json.Marshal(vaData)
 		if err := s.redis.Set(ctx, key, data, time.Duration(ttl)*time.Second).Err(); err != nil {
-			slog.Error("account.virtual_account.redis_store_failed", "error", err)
+			slog.Error("Account.VirtualAccount.Redis_Store_Failed", "error", err)
 			utils.SendErrorResponse(w, "Failed to generate virtual account", http.StatusFailedDependency, nil)
 			return
 		}
-		slog.Info("account.virtual_account.generated", "merchant_id", merchantIDStr, "account_number", accountNumber, "ttl", ttl)
+		slog.Info("Account.VirtualAccount.Generated", "merchant_id", merchantIDStr, "account_number", accountNumber, "ttl", ttl)
 	} else {
-		slog.Warn("account.virtual_account.redis_unavailable")
+		slog.Warn("Account.VirtualAccount.Redis_Unavailable")
 	}
 
-	slog.Info("account.GetVirtualAccount.success", "merchant_id", merchantIDStr)
+	slog.Info("Account.GetVirtualAccount.Success", "merchant_id", merchantIDStr)
 	utils.SendSuccessResponse(w, "VA Generated", map[string]any{
 		"virtualAccount": VirtualAccountData{
 			AccountNumber: accountNumber,
@@ -463,7 +460,8 @@ func generateVirtualAccountNumber() string {
 // @Router /account/limits [put]
 func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.UpdateUserLimits.start")
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+	reqCtx := r.Context()
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, reqCtx)
 
 	// userID is already an int, no need to convert
 
@@ -472,9 +470,17 @@ func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request
 		SingleTransactionLimit int64 `json:"singleTransactionLimit"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		slog.Error("account.UpdateUserLimits.decode_error", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		slog.Warn("account.UpdateUserLimits.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
@@ -490,7 +496,7 @@ func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	_, err := s.db.Exec(`
+	_, err := s.db.ExecContext(reqCtx, `
 		INSERT INTO user_limits (user_id, daily_limit, single_transaction_limit, updated_at)
 		VALUES ($1, $2, $3, NOW())
 		ON CONFLICT (user_id) DO UPDATE
@@ -524,9 +530,12 @@ func (s *AccountService) UpdateUserLimits(w http.ResponseWriter, r *http.Request
 // @Router /account/send-otp [post]
 func (s *AccountService) GenerateUserOTP(w http.ResponseWriter, r *http.Request) {
 	slog.Info("account.GenerateUserOTP.start")
+
+	reqCtx := r.Context()
+
 	var req struct {
-		Action  string `json:"action" validate:"required"`
-		Channel string `json:"channel" validate:"required,oneof=SMS EMAIL"`
+		Action string `json:"action" validate:"required"`
+		//Channel models.Channel `json:"channel" validate:"required,oneof=OTP BYPASS FACIAL_RECOGNITION"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -541,10 +550,10 @@ func (s *AccountService) GenerateUserOTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	userId, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+	userId, _ := utils.ExtractUserMerchantInfoFromContext(w, reqCtx)
 
 	otp := utils.GenerateOTP()
-	key := fmt.Sprintf("%s:USER_OTP:%d", req.Action, userId)
+	key := fmt.Sprintf("%s:USER_2FA:%d", req.Action, userId)
 
 	if s.redis != nil {
 		ctx := context.Background()
@@ -555,17 +564,11 @@ func (s *AccountService) GenerateUserOTP(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	//OTPType models.NotificationType :=
-	//switch req.Action {
-	//case "2FA-CODE":
-	//	OT
-	//}
-
 	// Send OTP via notification
 	if s.notificationSVC != nil {
-		user := s.fetchUserForNotification(userId)
+		user := s.fetchUserForNotification(reqCtx, userId)
 
-		slog.Info("user.acct.generate_otp.fetch_user_otp", "user_id", userId, "action", req.Action, "channel", req.Channel)
+		slog.Info("user.acct.generate_otp.fetch_user_otp", "user_id", userId, "action", req.Action)
 
 		go s.notificationSVC.SendOTPEmail(user.Email, otp, "10 minutes", models.TransactionOTP)
 		go s.notificationSVC.SendOTPSmS(user.PhoneNumber, otp, "10 minutes", models.TransactionOTP)
@@ -585,27 +588,37 @@ func (s *AccountService) ValidateUser2FA(ctx context.Context, userId, userOTP, A
 	if Action == "BYPASS" {
 		slog.Warn("account.validate.user.2FA.bypass", "user_id", userId)
 		return true
+	} else if Action == "2FA-CODE" {
+		key := fmt.Sprintf("%s:USER_2FA:%s", Action, userId)
+
+		if s.redis != nil {
+			storedOTP, err := s.redis.Get(ctx, key).Result()
+			if err != nil {
+				slog.Error("user.acct.validate_2FA.retrieve.stored.failed", "error", err)
+				return false
+			}
+
+			if storedOTP != userOTP {
+				slog.Warn("account.verify_otp.invalid")
+				return false
+			}
+
+			s.redis.Del(ctx, key)
+			slog.Info("user.acct.validate_otp_successful", "action", Action)
+			return true
+		}
+	} else if Action == "FACIAL_RECOGNITION" {
+		slog.Info("account.validate.user.2FA.facial_recognition", "user_id", userId)
+
+		// Placeholder for facial recognition logic
+		// In a real implementation, this would involve calling a facial recognition service
+		// and comparing the result against stored facial data for the user.
+		return true
 	}
 
-	key := fmt.Sprintf("%s:USER_2FA:%s", Action, userId)
+	slog.Warn("account.validate.user.2FA.invalid_action", "action", Action)
 
-	if s.redis != nil {
-		storedOTP, err := s.redis.Get(ctx, key).Result()
-		if err != nil {
-			slog.Error("user.acct.validate_2FA.retrieve.stored.failed", "error", err)
-			return false
-		}
-
-		if storedOTP != userOTP {
-			slog.Warn("account.verify_otp.invalid")
-			return false
-		}
-
-		s.redis.Del(ctx, key)
-	}
-
-	slog.Info("user.acct.validate_otp_successful", "action", Action)
-	return true
+	return false
 }
 
 // GenerateQRCode generates a QR Code
@@ -725,7 +738,7 @@ func (s *AccountService) GenerateUSSDCode(w http.ResponseWriter, r *http.Request
 
 	if err := dec.Decode(&req); err != nil {
 		slog.Error("account.generate_code.decode_failed", "error", err)
-		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
 
@@ -790,7 +803,7 @@ func (s *AccountService) ValidateUSSDCode(w http.ResponseWriter, r *http.Request
 
 	if err := dec.Decode(&req); err != nil {
 		slog.Error("account.ValidateUSSDCode.decode_error", "error", err)
-		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
 
@@ -852,7 +865,7 @@ func (s *AccountService) GetUserCodes(w http.ResponseWriter, r *http.Request) {
 	utils.SendSuccessResponse(w, "Success", codes, http.StatusOK)
 }
 
-func (s *AccountService) fetchUserForNotification(id int) *models.User {
+func (s *AccountService) fetchUserForNotification(ctx context.Context, id int) *models.User {
 	slog.Info("account.fetchUserForNotification.start", "user_id", id)
 	user := &models.User{ID: id}
 
@@ -860,14 +873,18 @@ func (s *AccountService) fetchUserForNotification(id int) *models.User {
 		key := fmt.Sprintf("user:notif:%d", id)
 		if cached, err := s.redis.Get(context.Background(), key).Bytes(); err == nil {
 			slog.Info("account.fetchUserForNotification.cache_hit", "user_id", id)
-			json.Unmarshal(cached, user)
+			dec := json.NewDecoder(strings.NewReader(string(cached)))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(user); err != nil {
+				slog.Warn("account.fetchUserForNotification.cache_decode_failed", "user_id", id, "error", err)
+			}
 			return user
 		}
 		slog.Info("account.fetchUserForNotification.cache_miss", "user_id", id)
 	}
 
 	var pushToken sql.NullString
-	err := s.db.QueryRow(`
+	err := s.db.QueryRowContext(ctx, `
 		SELECT email, phone_number, first_name
 		FROM users WHERE id = $1
 	`, id).Scan(&user.Email, &user.PhoneNumber, &user.FirstName)
@@ -914,7 +931,7 @@ func (s *AccountService) ValidateFacialIdentity(w http.ResponseWriter, r *http.R
 
 	if err := dec.Decode(&req); err != nil {
 		slog.Error("account.face.identity.verification.decode_error", "error", err)
-		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
 

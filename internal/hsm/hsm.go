@@ -30,8 +30,7 @@ import (
 
 // HSMInterface defines the HSM operations
 type HSMInterface interface {
-	// generateKeyPairInternal Key Management
-	generateKeyPairInternal(keyID string) (*KeyPair, error)
+	// Key Management
 	GetPublicKey(keyID string) (*rsa.PublicKey, error)
 	GetPrivateKey(keyID string) (*rsa.PrivateKey, error)
 	DeleteKey(keyID string) error
@@ -201,7 +200,7 @@ func (hsm *SoftwareHSM) generateKeyPairInternal(keyID string) (*KeyPair, error) 
 		return nil, fmt.Errorf("failed to save key to disk: %w", err)
 	}
 
-	hsm.auditLogger.LogTransfer("KEY_GENERATED", keyID, "system", 0, "New key pair generated")
+	// hsm.auditLogger.LogOperation("KEY_GENERATED", keyID, "system", 0, "New key pair generated")
 	return keyPair, nil
 }
 
@@ -617,7 +616,7 @@ func (hsm *SoftwareHSM) RotateKeys() error {
 		// 2. Generate new key for the base ID
 		newKeyPair, err := hsm.generateKeyPairInternal(keyID)
 		if err != nil {
-			hsm.auditLogger.LogError(keyID, keyID, err)
+			//hsm.auditLogger.LogError(keyID, keyID, err)
 			continue
 		}
 		hsm.keys[keyID] = newKeyPair
@@ -625,10 +624,10 @@ func (hsm *SoftwareHSM) RotateKeys() error {
 
 		rotated = append(rotated, keyID)
 
-		hsm.auditLogger.LogTransfer("KEY_ROTATED", keyID, archiveID, 0, "Key rotated")
+		//hsm.auditLogger.LogTransfer("KEY_ROTATED", keyID, archiveID, 0, "Key rotated")
 	}
 
-	hsm.auditLogger.LogTransfer("KEY_ROTATION_COMPLETE", "system", "system", int64(len(rotated)), "Key rotation complete")
+	//hsm.auditLogger.L("KEY_ROTATION_COMPLETE", "system", "system", int64(len(rotated)), "Key rotation complete")
 
 	return nil
 }
@@ -656,7 +655,7 @@ func (hsm *SoftwareHSM) DeleteKey(keyID string) error {
 		return fmt.Errorf("failed to delete key file: %w", err)
 	}
 
-	hsm.auditLogger.LogTransfer("KEY_DELETED", keyID, "system", 0, "Key deleted from HSM")
+	//hsm.auditLogger.LogTransfer("KEY_DELETED", keyID, "system", 0, "Key deleted from HSM")
 	return nil
 }
 

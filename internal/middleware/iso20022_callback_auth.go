@@ -11,9 +11,20 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/viper"
 )
+
+// sanitizeISO strips control characters to prevent log injection.
+func sanitizeISO(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // ISO20022CallbackAuth verifies HMAC signatures on ISO20022 callback requests
 // Supports two authentication methods:
@@ -21,8 +32,6 @@ import (
 // 2. Mutual TLS: Client certificate verification via tls.ConnectionState
 func ISO20022CallbackAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only verify callbacks for ISO20022 endpoints as per NIBSS specs
-		// Skip verification for non-callback requests
 		callbackEndpoints := map[string]bool{
 			"/pacs008": true,
 			"/pacs002": true,
@@ -32,31 +41,28 @@ func ISO20022CallbackAuth(next http.Handler) http.Handler {
 		}
 
 		if !callbackEndpoints[r.URL.Path] {
-			// Not a callback endpoint, skip authentication
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Check if mutual TLS is enabled
 		if viper.GetBool("iso20022.callback.tls.enabled") {
 			if err := verifyMutualTLS(r); err != nil {
-				slog.Warn("callback.auth.mtls_failed", "error", err.Error(), "remote_addr", r.RemoteAddr)
+				slog.Warn("callback.auth.mtls_failed", "error", sanitizeISO(err.Error()), "remote_addr", sanitizeISO(r.RemoteAddr))
 				http.Error(w, "MTLS verification failed", http.StatusUnauthorized)
 				return
 			}
-			slog.Debug("callback.auth.mtls_verified", "remote_addr", r.RemoteAddr)
+			slog.Debug("callback.auth.mtls_verified", "remote_addr", sanitizeISO(r.RemoteAddr))
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Fall back to HMAC verification
 		if err := verifyHMACSignature(r); err != nil {
-			slog.Warn("callback.auth.hmac_failed", "error", err.Error(), "remote_addr", r.RemoteAddr)
+			slog.Warn("callback.auth.hmac_failed", "error", sanitizeISO(err.Error()), "remote_addr", sanitizeISO(r.RemoteAddr))
 			http.Error(w, "HMAC verification failed", http.StatusUnauthorized)
 			return
 		}
 
-		slog.Debug("callback.auth.hmac_verified", "remote_addr", r.RemoteAddr)
+		slog.Debug("callback.auth.hmac_verified", "remote_addr", sanitizeISO(r.RemoteAddr))
 		next.ServeHTTP(w, r)
 	})
 }
@@ -69,7 +75,6 @@ func verifyHMACSignature(r *http.Request) error {
 		return fmt.Errorf("missing X-Signature header")
 	}
 
-	// Parse signature header: "sha256=hexvalue"
 	parts := strings.SplitN(signature, "=", 2)
 	if len(parts) != 2 || parts[0] != "sha256" {
 		return fmt.Errorf("invalid X-Signature format, expected sha256=<hex>")
@@ -77,27 +82,21 @@ func verifyHMACSignature(r *http.Request) error {
 
 	providedSignature := parts[1]
 
-	// Read and buffer the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read request body: %w", err)
 	}
-
-	// Restore body for handler to read
 	r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-	// Get HMAC secret from config
 	secret := viper.GetString("iso20022.callback.hmac_secret")
 	if secret == "" {
 		return fmt.Errorf("ISO20022_CALLBACK_HMAC_SECRET not configured")
 	}
 
-	// Calculate expected HMAC
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(body)
 	expectedSignature := hex.EncodeToString(h.Sum(nil))
 
-	// Constant-time comparison to prevent timing attacks
 	if !hmac.Equal([]byte(expectedSignature), []byte(providedSignature)) {
 		return fmt.Errorf("signature mismatch")
 	}
@@ -105,87 +104,79 @@ func verifyHMACSignature(r *http.Request) error {
 	return nil
 }
 
-// verifyMutualTLS validates the client certificate
-// Checks that the certificate is present, not expired, and signed by trusted CA
+// verifyMutualTLS validates the client certificate against validity period,
+// allowed issuers, and whitelisted serials.
 func verifyMutualTLS(r *http.Request) error {
-	tlsConn := r.TLS
-	if tlsConn == nil {
+	if r.TLS == nil {
 		return fmt.Errorf("TLS connection information not available")
 	}
-
-	// Verify client certificate is present
-	if len(tlsConn.PeerCertificates) == 0 {
+	if len(r.TLS.PeerCertificates) == 0 {
 		return fmt.Errorf("client certificate not provided")
 	}
 
-	clientCert := tlsConn.PeerCertificates[0]
-
-	// Validate certificate is not expired
-	if err := clientCert.VerifyHostname(""); err != nil {
-		// VerifyHostname is not suitable for mutual TLS, skip
-	}
-
-	// Additional validation: check certificate validity period
+	clientCert := r.TLS.PeerCertificates[0]
 	now := time.Now()
+
 	if now.Before(clientCert.NotBefore) {
-		return fmt.Errorf("certificate not yet valid: notBefore=%v", clientCert.NotBefore)
+		return fmt.Errorf("certificate not yet valid")
 	}
 	if now.After(clientCert.NotAfter) {
-		return fmt.Errorf("certificate expired: notAfter=%v", clientCert.NotAfter)
+		return fmt.Errorf("certificate expired")
 	}
 
-	// Check certificate is in the expected issuer list (optional)
-	allowedIssuers := viper.GetStringSlice("iso20022.callback.tls.allowed_issuers")
-	if len(allowedIssuers) > 0 {
-		issuerMatched := false
-		for _, issuer := range allowedIssuers {
-			if strings.Contains(clientCert.Issuer.String(), issuer) {
-				issuerMatched = true
-				break
-			}
-		}
-		if !issuerMatched {
-			return fmt.Errorf("client certificate issuer not in allowed list")
-		}
+	if err := checkAllowedIssuers(clientCert.Issuer.String()); err != nil {
+		return err
 	}
-
-	// Check certificate serial number against whitelist (optional)
-	whitelistedSerials := viper.GetStringSlice("iso20022.callback.tls.whitelisted_serials")
-	if len(whitelistedSerials) > 0 {
-		serialMatched := false
-		for _, serial := range whitelistedSerials {
-			if clientCert.SerialNumber.String() == serial {
-				serialMatched = true
-				break
-			}
-		}
-		if !serialMatched {
-			return fmt.Errorf("client certificate serial not whitelisted")
-		}
+	if err := checkWhitelistedSerials(clientCert.SerialNumber.String()); err != nil {
+		return err
 	}
 
 	slog.Info("callback.auth.mtls_certificate_verified",
-		"subject", clientCert.Subject.String(),
-		"issuer", clientCert.Issuer.String(),
-		"serial", clientCert.SerialNumber.String(),
+		"subject", sanitizeISO(clientCert.Subject.String()),
+		"issuer", sanitizeISO(clientCert.Issuer.String()),
+		"serial", sanitizeISO(clientCert.SerialNumber.String()),
 	)
-
 	return nil
 }
 
+func checkAllowedIssuers(issuer string) error {
+	allowed := viper.GetStringSlice("iso20022.callback.tls.allowed_issuers")
+	if len(allowed) == 0 {
+		return nil
+	}
+	for _, a := range allowed {
+		if strings.Contains(issuer, a) {
+			return nil
+		}
+	}
+	return fmt.Errorf("client certificate issuer not in allowed list")
+}
+
+func checkWhitelistedSerials(serial string) error {
+	whitelisted := viper.GetStringSlice("iso20022.callback.tls.whitelisted_serials")
+	if len(whitelisted) == 0 {
+		return nil
+	}
+	for _, s := range whitelisted {
+		if serial == s {
+			return nil
+		}
+	}
+	return fmt.Errorf("client certificate serial not whitelisted")
+}
+
 // ISO20022CallbackAuthOptional is a lenient version that logs failures but allows requests through
-// Useful for gradual rollout or monitoring
 func ISO20022CallbackAuthOptional(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if viper.GetBool("iso20022.callback.tls.enabled") {
 			if err := verifyMutualTLS(r); err != nil {
-				slog.Info("callback.auth.mtls_optional_failed", "error", err.Error())
+				slog.Info("callback.auth.mtls_optional_failed", "error", sanitizeISO(err.Error()))
 			} else {
 				slog.Debug("callback.auth.mtls_verified")
 			}
 		} else {
 			if err := verifyHMACSignature(r); err != nil {
-				slog.Info("callback.auth.hmac_optional_failed", "error", err.Error())
+				slog.Info("callback.auth.hmac_optional_failed", "error", sanitizeISO(err.Error()))
 			} else {
 				slog.Debug("callback.auth.hmac_verified")
 			}

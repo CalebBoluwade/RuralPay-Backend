@@ -1,5 +1,4 @@
 CREATE TABLE IF NOT EXISTS user_limits (
-    id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     daily_limit BIGINT NOT NULL DEFAULT 500000,
     single_transaction_limit BIGINT NOT NULL DEFAULT 100000,

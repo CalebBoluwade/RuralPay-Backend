@@ -1,7 +1,6 @@
 -- Transactions table for payment transactions
 CREATE TABLE IF NOT EXISTS transactions (
-    id SERIAL PRIMARY KEY,
-    transaction_id VARCHAR(255) UNIQUE NOT NULL,
+    transaction_id VARCHAR(255) UNIQUE PRIMARY KEY NOT NULL,
     reference_id VARCHAR(255),
     debit_id VARCHAR(255) REFERENCES cards(card_id),
     credit_id VARCHAR(255) REFERENCES cards(card_id),

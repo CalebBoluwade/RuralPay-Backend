@@ -105,10 +105,10 @@ func main() {
 	// Validate HSM configuration
 	masterKey := viper.GetString("hsm.master_key")
 	if masterKey == "" {
+		slog.Debug("server.hsm.config_debug", "master_key_length", len(masterKey), "has_value", masterKey != "")
 		slog.Error("server.hsm.config_missing", "error", "HSM_MASTER_KEY environment variable is required")
 		os.Exit(1)
 	}
-	slog.Debug("server.hsm.config_debug", "master_key_length", len(masterKey), "has_value", masterKey != "")
 
 	hsm, err := hsm.InitHSM(hsm.Config{
 		HSMType:         viper.GetString("hsm.type"),
@@ -140,7 +140,7 @@ func main() {
 	// Initialize services
 	notificationService := services.NewNotificationService(db)
 	userService := services.NewUserService(db, redisClient, hsm, notificationService)
-	bankService := services.NewBankService()
+	bankService := services.NewBankService(db)
 	accountService := services.NewAccountService(db, redisClient)
 	cardService := services.NewCardService(db, hsm)
 	iso20022Service := services.NewISO20022Service()
@@ -175,13 +175,17 @@ func main() {
 	r.Use(mW.RateLimiter(redisClient, mW.GlobalLimit))
 
 	//CORS
+	allowedOrigins := viper.GetStringSlice("cors.allowed_origins")
+	if len(allowedOrigins) == 0 {
+		slog.Error("server.cors.no_allowed_origins")
+		os.Exit(1)
+	}
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
-		MaxAge:           300,
+		AllowedOrigins: allowedOrigins,
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		ExposedHeaders: []string{"Link"},
+		MaxAge:         300,
 	}))
 
 	// Health Check Endpoint
@@ -192,14 +196,27 @@ func main() {
 		httpSwagger.URL("/swagger/doc.json"),
 	))
 
-	// Serve OpenAPI spec (hardcoded path — not derived from request input)
+	// Serve OpenAPI spec — opened once at startup, served via ServeContent to avoid
+	// http.ServeFile path traversal via r.URL.Path manipulation (CWE-22/23)
 	openAPIPath, err := filepath.Abs("./api/openapi.yaml")
 	if err != nil {
 		slog.Error("server.openapi.path_resolve_failed", "error", err)
 		os.Exit(1)
 	}
+	openAPIFile, err := os.Open(openAPIPath)
+	if err != nil {
+		slog.Error("server.openapi.open_failed", "error", err)
+		os.Exit(1)
+	}
+	defer openAPIFile.Close()
+	openAPIStat, err := openAPIFile.Stat()
+	if err != nil {
+		slog.Error("server.openapi.stat_failed", "error", err)
+		os.Exit(1)
+	}
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, openAPIPath)
+		w.Header().Set("Content-Type", "application/yaml")
+		http.ServeContent(w, r, "openapi.yaml", openAPIStat.ModTime(), openAPIFile)
 	})
 
 	// Static file server — covers bank logos, QR landing CSS/JS, and any future assets
@@ -253,6 +270,7 @@ func main() {
 			r.Use(mW.RateLimiter(redisClient, mW.AuthGeneral))
 			r.Post("/auth", userService.RegisterNewUser)
 			r.Post("/auth/refresh", userService.RefreshToken)
+			r.Post("/auth/logout", userService.LogoutUser)
 
 			r.Post("/account/validate-identity", accountService.ValidateFacialIdentity)
 		})
@@ -273,7 +291,6 @@ func main() {
 			r.Delete("/auth", userService.DeleteUserProfile)
 
 			r.Get("/auth/account", userService.GetUserAccount)
-			r.Post("/auth/logout", userService.LogoutUser)
 
 			// Account endpoints
 			r.Post("/account/send-otp", accountService.GenerateUserOTP)

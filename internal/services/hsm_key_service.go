@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/x509"
 	"database/sql"
@@ -65,7 +66,7 @@ func (s *HSMKeyService) syncKeyToDatabase(keyID string) error {
 	keyType, keySize := s.getKeyTypeAndSize(keyID, publicKeyPEM)
 
 	// Call the database upsert function
-	_, err = s.db.Exec(`
+	_, err = s.db.ExecContext(context.Background(), `
 		SELECT upsert_hsm_key($1, $2, $3, $4, $5, $6, $7, $8)
 	`, keyID, keyType, keyID, keySize, publicKeyPEM, "ENCRYPTED_BY_HSM",
 		time.Now().Add(365*24*time.Hour), `{"synced_from_hsm": true}`)
@@ -125,7 +126,7 @@ func (s *HSMKeyService) CreateNewKeysExternal(w http.ResponseWriter, req *http.R
 
 	_, err := s.hsm.GenerateAndSaveKeyPairExternal("app_signing")
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to generate key pair external for app_signing: %v", err)
+		slog.ErrorContext(ctx, "failed to generate key pair external for app_signing", "error", err)
 		utils.SendErrorResponse(w, "Public Key Not Found", http.StatusNotFound, nil)
 		return
 	}

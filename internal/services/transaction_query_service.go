@@ -228,24 +228,33 @@ func (s *TransactionQueryService) GetRecentTransactions(w http.ResponseWriter, r
 	utils.SendSuccessResponse(w, "Transactions Fetched Successfully", results, http.StatusOK)
 }
 
-func buildFilterClauses(argIdx int, f txFilters, col string) ([]string, []any) {
+// allowedStatuses is the closed set of valid transaction status values.
+var allowedStatuses = map[string]bool{
+	"PENDING": true, "SUCCESS": true, "COMPLETED": true, "FAILED": true, "REVERSED": true,
+}
+
+func buildFilterClauses(argIdx int, f txFilters, tablePrefix string) ([]string, []any) {
 	var clauses []string
 	var args []any
+
 	if f.Status != "" {
-		clauses = append(clauses, fmt.Sprintf("%sstatus = $%d", col, argIdx))
-		args = append(args, strings.ToUpper(f.Status))
-		argIdx++
+		status := strings.ToUpper(f.Status)
+		if allowedStatuses[status] {
+			clauses = append(clauses, fmt.Sprintf("%sstatus = $%d", tablePrefix, argIdx))
+			args = append(args, status)
+			argIdx++
+		}
 	}
 	if f.StartDate != "" {
 		if t, err := time.Parse(time.RFC3339, f.StartDate); err == nil {
-			clauses = append(clauses, fmt.Sprintf("%screated_at >= $%d", col, argIdx))
+			clauses = append(clauses, fmt.Sprintf("%screated_at >= $%d", tablePrefix, argIdx))
 			args = append(args, t)
 			argIdx++
 		}
 	}
 	if f.EndDate != "" {
 		if t, err := time.Parse(time.RFC3339, f.EndDate); err == nil {
-			clauses = append(clauses, fmt.Sprintf("%screated_at <= $%d", col, argIdx))
+			clauses = append(clauses, fmt.Sprintf("%screated_at <= $%d", tablePrefix, argIdx))
 			args = append(args, t)
 		}
 	}
@@ -264,9 +273,9 @@ func (s *TransactionQueryService) fetchRecentUserTransactions(userID int, f txFi
 	const base = "SELECT transaction_id, COALESCE(debit_id, ''), COALESCE(credit_id, ''), amount::text, currency," +
 		" COALESCE(type, 'DEBIT'), COALESCE(payment_mode, 'CARD'), fee::text, status, COALESCE(narration, ''), created_at," +
 		" COUNT(*) OVER() AS total_count FROM transactions WHERE user_id = $1"
-	query := base + " AND " + strings.Join(clauses, " AND ")
-	if len(clauses) == 0 {
-		query = base
+	query := base
+	if len(clauses) > 0 {
+		query += " AND " + strings.Join(clauses, " AND ")
 	}
 	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 
@@ -324,9 +333,9 @@ func (s *TransactionQueryService) fetchRecentMerchantTransactions(merchantID int
 		" (t.amount * m.commission_rate / 100)::text," +
 		" CASE m.settlement_cycle WHEN 'DAILY' THEN t.created_at + INTERVAL '1 day' WHEN 'WEEKLY' THEN t.created_at + INTERVAL '7 days' WHEN 'MONTHLY' THEN t.created_at + INTERVAL '1 month' END," +
 		" COUNT(*) OVER() AS total_count FROM transactions t JOIN merchants m ON m.account_id = t.credit_id WHERE m.id = $1"
-	query := base + " AND " + strings.Join(clauses, " AND ")
-	if len(clauses) == 0 {
-		query = base
+	query := base
+	if len(clauses) > 0 {
+		query += " AND " + strings.Join(clauses, " AND ")
 	}
 	query += fmt.Sprintf(" ORDER BY t.created_at DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 

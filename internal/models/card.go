@@ -24,8 +24,8 @@ type BINResponse struct {
 	IssuerBank     string `json:"issuerBank"` // GTBank, Zenith, etc.
 	IssuerBankLogo string `json:"issuerBankLogo,omitempty"`
 	Type           string `json:"type"`     // Debit, Credit
-	Country        string `json:"country"`  // NG, US
-	Currency       string `json:"currency"` // NGN, USD
+	Country        string `json:"country"`  // NGN
+	Currency       string `json:"currency"` // NGN
 	Source         string `json:"source"`   // "internal" or "external"
 }
 

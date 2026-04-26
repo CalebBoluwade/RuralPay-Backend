@@ -73,6 +73,17 @@ func init() {
 	_ = viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
 	_ = viper.BindEnv("nibss.bvn_url", "NIBSS_BVN_URL")
 
+	// NIBSS NIP (SOAP) configuration
+	_ = viper.BindEnv("nip.bank_code", "NIP_BANK_CODE")
+	_ = viper.BindEnv("nip.payment_prefix", "NIP_PAYMENT_PREFIX")
+	_ = viper.BindEnv("nip.crypto_url", "NIP_CRYPTO_URL")
+	_ = viper.BindEnv("nip.core_url", "NIP_CORE_URL")
+	_ = viper.BindEnv("nip.encryption_base_url", "NIP_ENCRYPTION_BASE_URL")
+	_ = viper.BindEnv("nip.base_url", "NIP_BASE_URL")
+	_ = viper.BindEnv("nip.tsq_base_url", "NIP_TSQ_BASE_URL")
+	_ = viper.BindEnv("nip.timeout_seconds", "NIP_TIMEOUT_SECONDS")
+	viper.SetDefault("nip.timeout_seconds", 60)
+
 	// ISO 20022 signing keys
 	_ = viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")
 	_ = viper.BindEnv("iso20022.nibss_pub_key_path", "ISO20022_NIBSS_PUB_KEY_PATH")
@@ -122,6 +133,9 @@ func init() {
 
 	_ = viper.BindEnv("app.base_url", "APP_BASE_URL")
 	viper.SetDefault("app.base_url", "http://localhost:8080")
+
+	_ = viper.BindEnv("cors.allowed_origins", "CORS_ALLOWED_ORIGINS")
+	viper.SetDefault("cors.allowed_origins", "http://localhost:3000")
 
 	_ = viper.BindEnv("app.name", "APP_NAME")
 	viper.SetDefault("app.name", "RuralPay")

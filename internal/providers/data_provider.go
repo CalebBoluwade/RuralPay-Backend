@@ -161,13 +161,15 @@ func (p *DataProvider) HandlePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.setIdempotency(req.TransactionID, "COMPLETED")
-	p.Audit.LogTransfer(req.TransactionID, req.DebitAccount, req.PhoneNumber, req.Amount, "COMPLETED")
+	p.setIdempotency(req.TransactionID, models.TransactionStatusSuccess)
+
+	//p.Audit.LogTransfer(req.TransactionID, req.DebitAccount, req.PhoneNumber, req.Amount, "COMPLETED")
+
 	slog.Info("airtime_data.handle.success", "tx_id", req.TransactionID)
 
 	utils.SendSuccessResponse(w, "Airtime/Data Purchase Successful", map[string]any{
 		"transactionId": req.TransactionID,
-		"status":        "COMPLETED",
+		"status":        models.TransactionStatusSuccess,
 		"paymentMode":   models.PaymentModeAirtime,
 	}, http.StatusOK)
 }

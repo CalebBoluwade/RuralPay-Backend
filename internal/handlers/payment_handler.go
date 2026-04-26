@@ -77,26 +77,32 @@ func (h *PaymentHandler) checkIdempotency(ctx context.Context, txID string) (mod
 // @Router /payment [post]
 // @Security BearerAuth
 func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
-	body, err := io.ReadAll(r.Body)
+	// Read body bytes to allow multiple reads
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_048_576))
 	if err != nil {
-		slog.Error("[PaymentHandler] Error Reading Request Body: %v", "err", err)
-		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
-		return
-	}
-	slog.Debug("[PaymentHandler] Request Body Received", "[RequestBody]", string(body))
-
-	var req models.PaymentRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		slog.Error("[PaymentHandler] Error Unmarshalling Request Body: %v, body: %s", "err", err, "[RequestBody]", string(body))
+		slog.Error("payment.handler.read_body_failed", "error", err)
 		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
 		return
 	}
 
-	slog.Info(fmt.Sprintf("[PaymentHandler] Incoming Request [TransactionID --> %s] [IP --> %s] [PaymentMode --> %s]", req.TransactionID, r.RemoteAddr, req.PaymentMode))
+	var req models.PaymentRequest
+	dec := json.NewDecoder(bytes.NewBuffer(bodyBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		slog.Error("payment.handler.decode_failed", "err", err)
+		utils.SendErrorResponse(w, utils.InvalidRequestError, http.StatusBadRequest, nil)
+		return
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		slog.Warn("payment.handler.multiple_json_objects")
+		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
+		return
+	}
+
+	slog.Info(fmt.Sprintf("Incoming.Payment.handler. Transaction ID --> [%s] Mode --> [%s]", req.TransactionID, req.PaymentMode))
 
 	if req.PaymentMode == "" {
-		slog.Error("[PaymentHandler] Missing Payment Mode in Request, body: %s", "[RequestBody]", string(body))
+		slog.Error("payment.handler.missing_payment_mode")
 		utils.SendErrorResponse(w, utils.InvalidPaymentMode, http.StatusBadRequest, nil)
 		return
 	}
@@ -125,10 +131,12 @@ func (h *PaymentHandler) HandlePayment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.Info(fmt.Sprintf("[PaymentHandler] Routing Transaction. [%s] to [%s] Provider", req.TransactionID, req.PaymentMode))
-	r.Body = io.NopCloser(bytes.NewBuffer(body))
+	// Restore body for provider to read
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+	slog.Info("payment.handler.routing", "tx_id", req.TransactionID, "mode", req.PaymentMode)
 	provider.HandlePayment(w, r)
-	slog.Info(fmt.Sprintf("[PaymentHandler] Provider Processing Completed. Transaction [%s] | Payment Mode [%s]", req.TransactionID, req.PaymentMode))
+	slog.Info("payment.handler.done", "tx_id", req.TransactionID, "mode", req.PaymentMode)
 }
 
 // GetBeneficiaries retrieves saved beneficiaries for the authenticated user

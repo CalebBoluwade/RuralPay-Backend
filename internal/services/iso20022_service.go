@@ -30,8 +30,7 @@ type ISO20022Service struct {
 
 func NewISO20022Service() *ISO20022Service {
 	svc := &ISO20022Service{
-		validator:   NewValidationHelper(),
-		nibssClient: NewNIBSSClient(),
+		validator: NewValidationHelper(),
 	}
 	if privPath := viper.GetString("iso20022.signing_key_path"); privPath != "" {
 		if pem, err := os.ReadFile(privPath); err == nil {

@@ -3,7 +3,6 @@ package providers
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -14,7 +13,6 @@ import (
 	"net/http"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/google/uuid"
 	"github.com/ruralpay/backend/internal/hsm"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/services"
@@ -23,21 +21,24 @@ import (
 
 type BankTransferPaymentProvider struct {
 	*BasePaymentProvider
-	iso20022Service *services.ISO20022Service
-	ledgerService   *services.DoubleLedgerService
-	acctService     *services.AccountService
-	feePercentage   float64
-	feeFixed        int64
+	NIBSSClient   *services.NIBSSClient
+	NIPService    *services.NIBSSNIPService
+	ledgerService *services.DoubleLedgerService
+	acctService   *services.AccountService
+	feePercentage float64
+	feeFixed      int64
 }
 
 func NewBankTransferPaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSMInterface) *BankTransferPaymentProvider {
 	return &BankTransferPaymentProvider{
 		BasePaymentProvider: NewBasePaymentProvider(db, redis, hsmInstance),
-		iso20022Service:     services.NewISO20022Service(),
 		ledgerService:       services.NewDoubleLedgerService(db),
-		acctService:         services.NewAccountService(db, redis),
-		feePercentage:       0.5,
-		feeFixed:            10,
+
+		NIBSSClient:   services.NewNIBSSClient(redis),
+		NIPService:    services.NewNIBSSNIPService(),
+		acctService:   services.NewAccountService(db, redis),
+		feePercentage: 0.5,
+		feeFixed:      10,
 	}
 }
 
@@ -125,7 +126,7 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 			Success:       false,
 			TransactionID: req.TransactionID,
 			Status:        models.TransactionStatusFailed,
-			Message:       utils.ValidationError,
+			Message:       utils.ResponseMessage(err.Error()),
 			PaymentMode:   models.PaymentModeBankTransfer,
 			Timestamp:     time.Now(),
 		}, err
@@ -141,26 +142,8 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	fee := p.calculateFee(req.Amount)
 	totalAmount := req.Amount + fee
 
-	// Generate HSM signature for the transaction
-	timestamp := time.Now()
-	nonce := uuid.New().String()
-
-	hsmTx := &hsm.Transaction{
-		ID:            req.TransactionID,
-		FromAccountID: req.FromAccount,
-		ToAccountID:   req.BeneficiaryAccountNumber,
-		Amount:        float64(req.Amount),
-		Timestamp:     timestamp,
-		Nonce:         nonce,
-	}
-	signature, err := p.HSM.SignTransaction(hsmTx)
-	if err != nil {
-		slog.Error("bank_transfer.process.sign_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, errors.New("security signing failed")
-	}
-
 	slog.Info("bank_transfer.process.ledger_transfer", "tx_id", req.TransactionID)
-	if err := p.ledgerService.TransferTx(tx, req.FromAccount, req.BeneficiaryAccountNumber, req.TransactionID, totalAmount); err != nil {
+	if err := p.ledgerService.TransferTx(ctx, tx, req.FromAccount, req.BeneficiaryAccountNumber, req.TransactionID, totalAmount); err != nil {
 		slog.Error("bank_transfer.process.ledger_failed", "tx_id", req.TransactionID, "error", err.Error())
 		return &models.PaymentResponse{
 			Reference:     "-",
@@ -173,33 +156,32 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		}, err
 	}
 
-	slog.Info("bank_transfer.process.inserting", "tx_id", req.TransactionID)
-	// Update metadata with signing info
-	if req.Metadata == nil {
-		req.Metadata = make(map[string]any)
-	}
-	req.Metadata["signing_nonce"] = nonce
-	req.Metadata["signing_timestamp"] = timestamp
-	metadata, _ := json.Marshal(req.Metadata)
-	locationJSON, _ := json.Marshal(req.Location)
+	sessionId := utils.GenerateNipSessionId(p.NIPService.GetNIPBankCode())
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO transactions 
-		(transaction_id, debit_id, credit_id, amount, fee, total_amount, currency, narration, type, payment_mode, status, location, metadata, user_id, created_at, signature)
-		VALUES ($3, $2, $4, $5, $6, $1, $7, $8, $9, 'BANK_TRANSFER', 'PENDING', $10, $11, $13, NOW(), $12)
-	`, totalAmount, req.FromAccount, req.TransactionID, req.BeneficiaryAccountNumber, req.Amount, fee, req.Currency, req.Narration, req.TxType, locationJSON, metadata, signature, req.UserID)
+	fundsTransferResult, err := p.NIBSSClient.FundsTransfer.DoTransaction(ctx, sessionId, req)
 
 	if err != nil {
-		slog.Error("bank_transfer.process.insert_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, err
+		slog.Error("Bank_Transfer.Process.Funds_Transfer_Failed", "tx_id", req.TransactionID, "error", err)
+		return &models.PaymentResponse{
+			Reference:     sessionId,
+			Success:       false,
+			TransactionID: req.TransactionID,
+			Status:        models.TransactionStatusFailed,
+			Message:       utils.PaymentFailed,
+			PaymentMode:   models.PaymentModeBankTransfer,
+			Timestamp:     time.Now(),
+		}, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		slog.Error("bank_transfer.process.commit_failed", "tx_id", req.TransactionID, "error", err)
-		return nil, err
+	if err = p.Audit.LogTransaction(ctx, tx, models.AuditEvent{
+		Timestamp: time.Now(),
+		EventType: "SUCCESSFUL_" + string(p.GetPaymentMode()) + "_TRANSATION",
+		TxRequest: req,
+	}); err != nil {
+		slog.ErrorContext(ctx, "Bank_Transfer.Audit.Log.Failed", "tx_id", req.TransactionID, "error", err)
 	}
 
-	slog.Info("bank_transfer.process.success", "tx_id", req.TransactionID)
+	slog.InfoContext(ctx, "Bank_Transfer.Audit.Log.Success", "tx_id", req.TransactionID)
 
 	// settlementErr, shouldReverse := p.sendToSettlement(ctx, req)
 	// if settlementErr != nil {
@@ -223,7 +205,7 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 
 	return &models.PaymentResponse{
 		Success:       true,
-		Reference:     "000000000000000000000000000",
+		Reference:     fundsTransferResult.Reference,
 		TransactionID: req.TransactionID,
 		Status:        models.TransactionStatusSuccess,
 		Message:       "Transaction Successful",
@@ -237,55 +219,55 @@ func (p *BankTransferPaymentProvider) calculateFee(amount int64) int64 {
 	return fee + p.feeFixed
 }
 
-func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req *models.PaymentRequest) (error, bool) {
-	slog.Info("bank_transfer.settlement.start", "tx_id", req.TransactionID)
-	modelTx := &models.TransactionRecord{
-		TransactionID: req.TransactionID,
-		FromAccountID: req.FromAccount,
-		ToAccountID:   req.BeneficiaryAccountNumber,
-		Type:          string(req.TxType),
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		Status:        models.TransactionStatusPending,
-	}
+// func (p *BankTransferPaymentProvider) sendToSettlement(ctx context.Context, req *models.PaymentRequest) (error, bool) {
+// 	slog.Info("bank_transfer.settlement.start", "tx_id", req.TransactionID)
+// 	modelTx := &models.TransactionRecord{
+// 		TransactionID: req.TransactionID,
+// 		FromAccountID: req.FromAccount,
+// 		ToAccountID:   req.BeneficiaryAccountNumber,
+// 		Type:          string(req.TxType),
+// 		Amount:        req.Amount,
+// 		Currency:      req.Currency,
+// 		Status:        models.TransactionStatusPending,
+// 	}
 
-	if bankCode, ok := req.Metadata["toBankCode"].(string); ok {
-		modelTx.ToBankCode = bankCode
-	}
+// 	if bankCode, ok := req.Metadata["toBankCode"].(string); ok {
+// 		modelTx.ToBankCode = bankCode
+// 	}
 
-	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
-	if err != nil {
-		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
-		if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionStatusISOCONVFailed, req.TransactionID); dbErr != nil {
-			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-		}
-		return err, true
-	}
+// 	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
+// 	if err != nil {
+// 		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
+// 		if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionStatusISOCONVFailed, req.TransactionID); dbErr != nil {
+// 			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+// 		}
+// 		return err, true
+// 	}
 
-	slog.Info("bank_transfer.settlement.sending", "tx_id", req.TransactionID)
-	resp, err := p.iso20022Service.SendToSettlement(ctx, doc)
-	if err != nil {
-		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
-		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
-		if shouldReverse {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionSettlementFailed, req.TransactionID); dbErr != nil {
-				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-			}
-		} else {
-			if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
-				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-			}
-		}
-		return err, shouldReverse
-	}
+// 	slog.Info("bank_transfer.settlement.sending", "tx_id", req.TransactionID)
+// 	resp, err := p.iso20022Service.SendToSettlement(ctx, doc)
+// 	if err != nil {
+// 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
+// 		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
+// 		if shouldReverse {
+// 			if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionSettlementFailed, req.TransactionID); dbErr != nil {
+// 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+// 			}
+// 		} else {
+// 			if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
+// 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+// 			}
+// 		}
+// 		return err, shouldReverse
+// 	}
 
-	slog.Info("bank_transfer.settlement.success", "tx_id", req.TransactionID, "status", resp.Status)
-	respJSON, _ := json.Marshal(resp)
-	if _, dbErr := p.DB.Exec(`UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, models.TransactionStatusSuccess, respJSON, req.TransactionID); dbErr != nil {
-		slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-	}
-	return nil, false
-}
+// 	slog.Info("bank_transfer.settlement.success", "tx_id", req.TransactionID, "status", resp.Status)
+// 	respJSON, _ := json.Marshal(resp)
+// 	if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, settlement_response = $2, updated_at = NOW() WHERE transaction_id = $3`, models.TransactionStatusSuccess, respJSON, req.TransactionID); dbErr != nil {
+// 		slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+// 	}
+// 	return nil, false
+// }
 
 func (p *BankTransferPaymentProvider) shouldReverseOnSettlementFailure(resp models.SettlementResult) bool {
 	switch resp.Status {

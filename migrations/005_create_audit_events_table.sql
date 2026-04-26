@@ -1,6 +1,5 @@
 -- Audit events table for HSM security logging
 CREATE TABLE IF NOT EXISTS audit_events (
-    id SERIAL PRIMARY KEY,
     timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
     event_type VARCHAR(50) NOT NULL,
     transaction_id VARCHAR(255),

@@ -2,7 +2,6 @@
 
 -- Accounts table with optimistic locking
 CREATE TABLE IF NOT EXISTS accounts (
-    id VARCHAR(255) PRIMARY KEY,
     balance BIGINT NOT NULL DEFAULT 0,
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()

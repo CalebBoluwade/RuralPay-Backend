@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     btn.addEventListener('click', function (e) {
       e.preventDefault();
-      window.location.href = scheme + '://pay?token=' + encodeURIComponent(token) + '&source=ruralpay';
+      window.location.href = scheme + '://' + (btn.dataset.route || 'pay/qr') + '?token=' + encodeURIComponent(token) + '&source=ruralpay';
       setTimeout(function () {
         if (fallback) window.location.href = fallback;
       }, 1800);

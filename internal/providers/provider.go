@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -40,38 +41,51 @@ func NewBasePaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance hsm.HSM
 		DB:              db,
 		Redis:           redis,
 		HSM:             hsmInstance,
-		Audit:           hsm.NewAuditLogger(),
+		Audit:           hsm.NewAuditLogger(db, hsmInstance),
 		Validator:       services.NewValidationHelper(),
 		notificationSVC: services.NewNotificationService(db),
 	}
 }
 
 func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *http.Request, provider PaymentProvider) {
-	slog.Info("payment.handle.start", "mode", provider.GetPaymentMode())
+	slog.Info(fmt.Sprintf("payment.handle.start.[%s]", provider.GetPaymentMode()))
 
-	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
+	ctx := r.Context()
 
-	var req models.PaymentRequest
-	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, ctx)
+
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_048_576))
+	if err != nil {
+		slog.Error("payment.handle.read_body_failed", "error", err.Error(), "raw_request", string(bodyBytes))
+		utils.SendErrorResponse(w, utils.PaymentFailed, http.StatusBadRequest, nil)
+		return
+	}
+
+	// restore body so decoder can still use it
+	r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	// r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
+	defer r.Body.Close()
 
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 
+	var req models.PaymentRequest
 	if err := dec.Decode(&req); err != nil {
-		slog.Error("payment.handle.decode_failed", "error", err)
-		utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
+		slog.Error("payment.handle.decode_failed", "error", err, "body", r.Body)
+		utils.SendErrorResponse(w, utils.ProcessingFailed, http.StatusBadRequest, nil)
 		return
 	}
 	slog.Info("payment.handle.request", "tx_id", req.TransactionID, "from", req.FromAccount, "to", req.BeneficiaryAccountNumber, "amount", req.Amount)
 
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		slog.Warn("payment.handle.multiple_json_objects")
+		slog.Warn(fmt.Sprintf("payment.handle.multiple_json_objects.%s", provider.GetPaymentMode()), "mode", provider.GetPaymentMode())
 		utils.SendErrorResponse(w, utils.SingleObjectError, http.StatusBadRequest, nil)
 		return
 	}
 
 	req.UserID = strconv.Itoa(userID)
 	req.PaymentMode = provider.GetPaymentMode()
+	req.IPAddress = utils.RealIP(r)
 
 	if req.TransactionID == "" {
 		req.TransactionID = fmt.Sprintf("PAY-%d", time.Now().UnixNano())
@@ -89,11 +103,8 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 
 	slog.Info("payment.handle.processing", "mode", req.PaymentMode, "tx_id", req.TransactionID, "amount", req.Amount)
 
-	response, err := provider.ProcessPayment(r.Context(), &req)
+	response, err := provider.ProcessPayment(ctx, &req)
 	if err != nil {
-		slog.Error("payment.handle.failed", "tx_id", req.TransactionID, "error", err)
-		base.Audit.LogError(req.TransactionID, req.FromAccount, err)
-
 		go func() {
 			user := base.fetchUserForNotification(userID)
 
@@ -118,12 +129,24 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 			}
 		}()
 
+		event := models.AuditEvent{
+			Timestamp: time.Now(),
+			EventType: "FAILED_TRANSACTION",
+			TxRequest: &req,
+			Error:     err.Error(),
+		}
+
+		if err = base.Audit.LogFailedTransaction(ctx, event); err != nil {
+			slog.Error("Failed To Log Failed Transaction", "err", err)
+		}
+
+		slog.Error("payment.processing.failed", "tx_id", req.TransactionID, "error", err, "res", response)
+
 		utils.SendErrorResponse(w, response.Message, http.StatusBadRequest, nil)
 		return
 	}
 
 	slog.Info("payment.handle.processed", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
-	//base.Audit.LogTransfer(req.TransactionID, req.FromAccount, req.BeneficiaryAccountNumber, req.Amount, response.Status)
 
 	go func() {
 		user := base.fetchUserForNotification(userID)

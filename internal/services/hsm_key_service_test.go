@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -16,29 +18,17 @@ func TestHSMKeyService_SyncKeysToDatabase(t *testing.T) {
 	service := NewHSMKeyService(db, mockHSM)
 
 	t.Run("successful sync", func(t *testing.T) {
-		publicKeyPEM := `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890
------END PUBLIC KEY-----`
+		privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		assert.NoError(t, err)
+		pubKey := &privKey.PublicKey
 
-		// Mock HSM calls
-		mockHSM.On("GetPublicKey", "card_signing").Return(publicKeyPEM, nil)
-		mockHSM.On("GetPublicKey", "transaction_signing").Return(publicKeyPEM, nil)
-		mockHSM.On("GetPublicKey", "user_encryption").Return(publicKeyPEM, nil)
-
-		// Mock database calls
-		mock.ExpectExec("SELECT upsert_hsm_key").
-			WithArgs("card_signing", "RSA", "card_signing", 2048, publicKeyPEM, "ENCRYPTED_BY_HSM", sqlmock.AnyArg(), `{"synced_from_hsm": true}`).
-			WillReturnResult(sqlmock.NewResult(1, 1))
+		mockHSM.On("GetPublicKey", "transaction_signing").Return(pubKey, nil)
 
 		mock.ExpectExec("SELECT upsert_hsm_key").
-			WithArgs("transaction_signing", "RSA", "transaction_signing", 2048, publicKeyPEM, "ENCRYPTED_BY_HSM", sqlmock.AnyArg(), `{"synced_from_hsm": true}`).
+			WithArgs("transaction_signing", "RSA", "transaction_signing", 2048, sqlmock.AnyArg(), "ENCRYPTED_BY_HSM", sqlmock.AnyArg(), `{"synced_from_hsm": true}`).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 
-		mock.ExpectExec("SELECT upsert_hsm_key").
-			WithArgs("user_encryption", "AES", "user_encryption", 256, publicKeyPEM, "ENCRYPTED_BY_HSM", sqlmock.AnyArg(), `{"synced_from_hsm": true}`).
-			WillReturnResult(sqlmock.NewResult(1, 1))
-
-		err := service.SyncKeysToDatabase()
+		err = service.SyncKeysToDatabase()
 		assert.NoError(t, err)
 
 		mockHSM.AssertExpectations(t)
@@ -49,11 +39,11 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890
 		mockHSM2 := &MockHSM{}
 		service2 := NewHSMKeyService(db, mockHSM2)
 
-		mockHSM2.On("GetPublicKey", "card_signing").Return("", assert.AnError)
+		mockHSM2.On("GetPublicKey", "transaction_signing").Return((*rsa.PublicKey)(nil), assert.AnError)
 
 		err := service2.SyncKeysToDatabase()
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to sync key card_signing")
+		assert.Contains(t, err.Error(), "failed to sync key transaction_signing")
 
 		mockHSM2.AssertExpectations(t)
 	})

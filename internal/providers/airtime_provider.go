@@ -144,6 +144,19 @@ func (p *AirtimeProvider) HandlePayment(w http.ResponseWriter, r *http.Request) 
 		"serviceType": req.Service,
 		"dataPlan":    req.DataPlan,
 	})
+
+	//event := hsm.AuditEvent{
+	//	Timestamp: time.Now(),
+	//	EventType: "TRANSFER",
+	//	TxRequest: req,
+	//}
+	//
+	//if p.Audit.LogTransaction(ctx, tx, event); err != nil {
+	//	slog.ErrorContext(ctx, "bank_transfer.audit.log.failed", "tx_id", req.TransactionID, "error", err)
+	//}
+
+	slog.InfoContext(ctx, "bank_transfer.audit.log.success", "tx_id", req.TransactionID)
+
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO transactions
 		(transaction_id, debit_id, amount, total_amount, currency, narration, type, payment_mode, status, metadata, user_id, created_at)
@@ -161,8 +174,8 @@ func (p *AirtimeProvider) HandlePayment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	p.setIdempotency(req.TransactionID, "COMPLETED")
-	p.Audit.LogTransfer(req.TransactionID, req.DebitAccount, req.PhoneNumber, req.Amount, "COMPLETED")
+	p.setIdempotency(req.TransactionID, models.TransactionStatusSuccess)
+
 	slog.Info("airtime_data.handle.success", "tx_id", req.TransactionID)
 
 	utils.SendSuccessResponse(w, "Airtime Purchase Successful", map[string]any{

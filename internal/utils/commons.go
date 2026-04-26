@@ -6,10 +6,23 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
+
+func RealIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return strings.SplitN(ip, ",", 2)[0]
+	}
+	if ip := r.Header.Get("X-Real-Ip"); ip != "" {
+		return ip
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return ip
+}
 
 func ExtractUserMerchantInfoFromContext(w http.ResponseWriter, ctx context.Context) (int, int) {
 	userIDStr, ok := ctx.Value("userID").(string)
@@ -70,4 +83,27 @@ func GenerateImageIdentityToken() string {
 	}
 
 	return string(token)
+}
+
+// GenerateNipSessionId generates a unique NIP SessionID: "{nipBankCode}{yyMMddHHmmss}{12RandomDigits}"
+func GenerateNipSessionId(nipBankCode string) string {
+	return nipBankCode + time.Now().Format("060102150405") + generateRandomNumericString(12)
+}
+
+// GenerateMandateRef generates a mandate reference: "{prefix}/{yyMMddHHmmss}/{8RandomDigits}"
+func GenerateMandateRef(prefix string) string {
+	if prefix == "" {
+		prefix = "RYLPAY"
+	}
+	return prefix + "/" + time.Now().Format("060102150405") + "/" + generateRandomNumericString(8)
+}
+
+func generateRandomNumericString(size int) string {
+	const digits = "0123456789"
+	b := make([]byte, size)
+	for i := range b {
+		n, _ := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(digits))))
+		b[i] = digits[n.Int64()]
+	}
+	return string(b)
 }

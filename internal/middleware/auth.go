@@ -72,31 +72,31 @@ func parseSessionClaims(token string) (sid, deviceID string, err error) {
 	return sid, deviceID, nil
 }
 
-func validateSession(ctx context.Context, sessionKey, deviceID string) error {
+func validateSession(ctx context.Context, sessionKey, deviceID string) (any, error) {
 	if redisClient == nil {
-		return nil
+		return nil, nil
 	}
 	sessionData, err := redisClient.Get(ctx, sessionKey).Result()
 	if err != nil {
 		slog.Warn("auth.session.not_found", "session_key", sessionKey, "error", err)
-		return utils.ErrSessionNotFound
+		return nil, utils.ErrSessionNotFound
 	}
-	var data map[string]string
+	var data map[string]any
 	if err := json.Unmarshal([]byte(sessionData), &data); err != nil {
 		slog.Error("auth.session.unmarshal_failed", "error", err)
-		return utils.ErrInvalidSession
+		return nil, utils.ErrInvalidSession
 	}
-	expiresAt, _ := strconv.ParseInt(data["expires_at"], 10, 64)
+	expiresAt, _ := strconv.ParseInt(fmt.Sprintf("%v", data["expires_at"]), 10, 64)
 	if time.Now().Unix() > expiresAt {
 		redisClient.Del(ctx, sessionKey)
-		return utils.ErrInvalidSession
+		return nil, utils.ErrInvalidSession
 	}
-	if data["device_id"] != deviceID {
+	if fmt.Sprintf("%v", data["device_id"]) != deviceID {
 		redisClient.Del(ctx, sessionKey)
-		return utils.ErrDeviceMismatch
+		return nil, utils.ErrDeviceMismatch
 	}
 	redisClient.Expire(ctx, sessionKey, cfg.InactivityTTL)
-	return nil
+	return data["notificationPreference"], nil
 }
 
 func AuthSessionMiddleware(next http.Handler) http.Handler {
@@ -125,7 +125,8 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 		}
 
 		ctx := r.Context()
-		if err := validateSession(ctx, constants.SessionKeyPrefix+sid, deviceID); err != nil {
+		notificationPreference, err := validateSession(ctx, constants.SessionKeyPrefix+sid, deviceID)
+		if err != nil {
 			if errors.Is(err, utils.ErrSessionNotFound) || errors.Is(err, utils.ErrInvalidSession) {
 				validator.SendErrorResponse(w, "Session Locked - User Presence Required", http.StatusLocked, nil)
 				return
@@ -135,7 +136,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		active, isAdmin, err := userService.CheckUserStatusAndPrivileges(userID)
+		active, isAdmin, err := userService.CheckUserStatusAndPrivileges(context.Background(), userID)
 		if err != nil {
 			validator.SendErrorResponse(w, "Invalid User Status", http.StatusUnauthorized, nil)
 			return
@@ -151,6 +152,7 @@ func AuthSessionMiddleware(next http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, "merchantID", fmt.Sprintf("%v", merchantID))
 		}
 		ctx = context.WithValue(ctx, "isAdmin", isAdmin)
+		ctx = context.WithValue(ctx, "notificationPreference", notificationPreference)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

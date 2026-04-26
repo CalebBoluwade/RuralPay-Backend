@@ -26,6 +26,8 @@ func (h *FeedbackHandler) HandleTransactionRating(w http.ResponseWriter, r *http
 	rating := q.Get("rating")
 	email := q.Get("email")
 
+	reqCtx := r.Context()
+
 	if transactionID == "" || rating == "" {
 		utils.SendErrorResponse(w, "transaction_id and rating are required", http.StatusBadRequest, nil)
 		return
@@ -35,7 +37,7 @@ func (h *FeedbackHandler) HandleTransactionRating(w http.ResponseWriter, r *http
 		return
 	}
 
-	_, err := h.db.Exec(
+	_, err := h.db.ExecContext(reqCtx,
 		`INSERT INTO transaction_feedback (transaction_id, email, rating, created_at)
 		 VALUES ($1, $2, $3, NOW())
 		 ON CONFLICT (transaction_id, email) DO UPDATE SET rating = EXCLUDED.rating`,
@@ -63,13 +65,15 @@ func (h *FeedbackHandler) HandleReferralSource(w http.ResponseWriter, r *http.Re
 	source := q.Get("source")
 	uid := q.Get("uid")
 
+	reqCtx := r.Context()
+
 	allowed := map[string]bool{"friend": true, "social": true, "search": true, "other": true}
 	if !allowed[source] {
 		utils.SendErrorResponse(w, "invalid source", http.StatusBadRequest, nil)
 		return
 	}
 
-	_, err := h.db.Exec(
+	_, err := h.db.ExecContext(reqCtx,
 		`INSERT INTO user_email_feedback (user_id, type, value, created_at)
 		 VALUES (NULLIF($1, '')::INTEGER, 'referral', $2, NOW())
 		 ON CONFLICT DO NOTHING`,
@@ -92,6 +96,8 @@ func (h *FeedbackHandler) HandleDeletionReason(w http.ResponseWriter, r *http.Re
 	reason := q.Get("reason")
 	uid := q.Get("uid")
 
+	reqCtx := r.Context()
+
 	allowed := map[string]bool{
 		"too_expensive":    true,
 		"switching_app":    true,
@@ -104,7 +110,7 @@ func (h *FeedbackHandler) HandleDeletionReason(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	_, err := h.db.Exec(
+	_, err := h.db.ExecContext(reqCtx,
 		`INSERT INTO user_email_feedback (user_id, type, value, created_at)
 		 VALUES (NULLIF($1, '')::INTEGER, 'deletion', $2, NOW())`,
 		uid, reason,

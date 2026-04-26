@@ -1,6 +1,5 @@
 -- Create virtual_accounts table for bank-issued virtual accounts
 CREATE TABLE IF NOT EXISTS virtual_accounts (
-    id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     account_number VARCHAR(10) UNIQUE NOT NULL,
     account_name VARCHAR(255) NOT NULL,
