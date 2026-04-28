@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"embed"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -27,6 +27,9 @@ import (
 	"github.com/spf13/viper"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
+
+// go:embed api
+var openAPISpec embed.FS
 
 // @title RuralPay Backend API
 // @version 1.0
@@ -196,27 +199,18 @@ func main() {
 		httpSwagger.URL("/swagger/doc.json"),
 	))
 
-	// Serve OpenAPI spec — opened once at startup, served via ServeContent to avoid
-	// http.ServeFile path traversal via r.URL.Path manipulation (CWE-22/23)
-	openAPIPath, err := filepath.Abs("./api/openapi.yaml")
-	if err != nil {
-		slog.Error("server.openapi.path_resolve_failed", "error", err)
-		os.Exit(1)
-	}
-	openAPIFile, err := os.Open(openAPIPath)
-	if err != nil {
-		slog.Error("server.openapi.open_failed", "error", err)
-		os.Exit(1)
-	}
-	defer openAPIFile.Close()
-	openAPIStat, err := openAPIFile.Stat()
-	if err != nil {
-		slog.Error("server.openapi.stat_failed", "error", err)
-		os.Exit(1)
-	}
+	// Serve OpenAPI spec from embedded files
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		openAPIData, err := openAPISpec.ReadFile("api/openapi.yaml")
+		if err != nil {
+			slog.Error("server.openapi.read_failed", "error", err)
+			http.Error(w, "OpenAPI spec not found", http.StatusNotFound)
+			return
+		}
 		w.Header().Set("Content-Type", "application/yaml")
-		http.ServeContent(w, r, "openapi.yaml", openAPIStat.ModTime(), openAPIFile)
+		w.Header().Set("Content-Length", string(rune(len(openAPIData))))
+		w.WriteHeader(http.StatusOK)
+		w.Write(openAPIData)
 	})
 
 	// Static file server — covers bank logos, QR landing CSS/JS, and any future assets
