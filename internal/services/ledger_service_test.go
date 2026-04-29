@@ -66,7 +66,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectCommit()
 
-		err := service.Transfer(fromAccountID, toAccountID, transactionId, amount)
+		err := service.Transfer(t.Context(), fromAccountID, toAccountID, transactionId, amount)
 		assert.NoError(t, err)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
@@ -102,7 +102,7 @@ func TestDoubleLedgerService_Transfer(t *testing.T) {
 
 		mock.ExpectRollback()
 
-		err := service.Transfer(fromAccountID, toAccountID, transactionId, amount)
+		err := service.Transfer(t.Context(), fromAccountID, toAccountID, transactionId, amount)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "insufficient balance")
 		assert.NoError(t, mock.ExpectationsWereMet())

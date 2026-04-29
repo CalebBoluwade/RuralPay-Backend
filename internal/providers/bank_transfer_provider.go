@@ -161,7 +161,7 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	fundsTransferResult, err := p.NIBSSClient.FundsTransfer.DoTransaction(ctx, sessionId, req)
 
 	if err != nil {
-		slog.Error("Bank_Transfer.Process.Funds_Transfer_Failed", "tx_id", req.TransactionID, "error", err)
+		slog.Error("Bank_Transfer.Process.Funds_Transfer_Failed", "tx_id", req.TransactionID, "error", err, "response", fundsTransferResult)
 		return &models.PaymentResponse{
 			Reference:     sessionId,
 			Success:       false,

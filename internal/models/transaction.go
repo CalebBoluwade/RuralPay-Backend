@@ -134,3 +134,11 @@ type AuditEvent struct {
 	Error     string          `json:"error,omitempty"`
 	Details   map[string]any  `json:"details"`
 }
+
+type ActivityEvent struct {
+	EventType string         `json:"event_type"`
+	UserID    string         `json:"user_id"`
+	IPAddress string         `json:"ip_address"`
+	Details   map[string]any `json:"details,omitempty"`
+	Error     string         `json:"error,omitempty"`
+}

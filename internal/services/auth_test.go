@@ -74,9 +74,10 @@ func TestAuthService_Register(t *testing.T) {
 }
 
 func TestAuthService_Login(t *testing.T) {
-	db, mock, err := sqlmock.New()
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	assert.NoError(t, err)
 	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
 
 	viper.Set("jwt.secret_key", "test-secret")
 	viper.Set("jwt.expiry_minutes", 10)
@@ -95,12 +96,14 @@ func TestAuthService_Login(t *testing.T) {
 
 		mock.ExpectQuery("SELECT.*FROM users u").
 			WithArgs("4359502429542").
-			WillReturnRows(sqlmock.NewRows([]string{"id", "email", "first_name", "last_name", "phone_number", "bvn", "username", "password", "account_id", "m.id", "m.business_name", "m.business_type", "m.tax_id", "m.status", "m.commission_rate", "m.settlement_cycle", "m.created_at", "m.updated_at"}).
-				AddRow(1, "test@example.com", "John", "Doe", "+2348012345678", "12345678901", "johndoe", hashedPassword, "4359502429542", nil, nil, nil, nil, nil, nil, nil, nil, nil))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "email", "first_name", "last_name", "phone_number", "bvn", "username", "password", "account_id", "m.id", "m.business_name", "m.business_type", "m.tax_id", "m.status", "m.commission_rate", "m.settlement_cycle", "m.created_at", "m.updated_at", "ul.daily_limit", "ul.single_transaction_limit", "un.use_device_push", "un.use_sms", "un.use_email"}).
+				AddRow(1, "test@example.com", "John", "Doe", "+2348012345678", "12345678901", "johndoe", hashedPassword, "4359502429542", nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 
 		mock.ExpectQuery("SELECT").
 			WithArgs("1").
 			WillReturnRows(sqlmock.NewRows([]string{"status", "is_admin"}).AddRow("active", false))
+		mock.ExpectExec("INSERT INTO audit_events").WillReturnResult(sqlmock.NewResult(1, 1))
+
 
 		req := models.LoginRequest{
 			Identifier: "4359502429542",
@@ -130,6 +133,8 @@ func TestAuthService_Login(t *testing.T) {
 		mock.ExpectQuery("SELECT.*FROM users u").
 			WithArgs("34324920424942").
 			WillReturnError(sql.ErrNoRows)
+		mock.ExpectExec("INSERT INTO audit_events").WillReturnResult(sqlmock.NewResult(1, 1))
+
 
 		req := models.LoginRequest{
 			Identifier: "34324920424942",
@@ -185,7 +190,7 @@ func TestGenerateJWT(t *testing.T) {
 		WithArgs("123").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "is_admin"}).AddRow("active", false))
 
-	token, err := svc.generateJWTWithSession(123, models.Merchant{ID: merchantID, Status: merchantStatus}, "test-session-id", "test-device-id")
+	token, err := svc.generateJWTWithSession(t.Context(), 123, models.Merchant{ID: merchantID, Status: merchantStatus}, "test-session-id", "test-device-id")
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
 }

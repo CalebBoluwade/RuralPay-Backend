@@ -39,7 +39,6 @@ type NotificationPayload struct {
 	Email         string
 	PhoneNumber   string
 	ExpoPushToken string
-	Preferences   []NotificationChannel
 	FeedbackURL   string
 	BaseURL       string
 }

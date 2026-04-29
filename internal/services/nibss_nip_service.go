@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -150,7 +151,7 @@ func (s *nipSoapClient) post(ctx context.Context, url, soapEnvelope string) (str
 		}
 		_ = xml.Unmarshal(body, &faultEnv)
 		slog.Error("nip.http_response_error", "url", url, "status_code", resp.StatusCode, "fault_string", faultEnv.Body.Fault.FaultString, "response_body", string(body))
-		return "", utils.NewNipErrorMsg(utils.NipInternalServerError,
+		return "", utils.NewNIPErrorMsg(utils.NIPResponseCode("99"),
 			faultEnv.Body.Fault.FaultString)
 	}
 
@@ -158,37 +159,51 @@ func (s *nipSoapClient) post(ctx context.Context, url, soapEnvelope string) (str
 	return extractSoapBodyInnerText(body), nil
 }
 
-// extractSoapBodyInnerText extracts the full inner XML of the SOAP Body's first child element.
-// For encrypt/decrypt responses this is plain text; for NIP responses it may be ciphertext.
+// extractSoapBodyInnerText extracts the text content from the SOAP Body.
+// NIBSS responses have the structure:
+//
+//	<S:Body><ns2:XxxResponse><return>TEXT_OR_XML</return></ns2:XxxResponse></S:Body>
+//
+// We need the raw inner content of <return> — which may be a hex ciphertext string
+// (encrypt/NIP responses) or a decrypted XML string (decrypt response).
 func extractSoapBodyInnerText(soapXML []byte) string {
-	type soapEnvelope struct {
-		Body struct {
-			Inner []byte `xml:",innerxml"`
-		} `xml:"Body"`
-	}
-	var env soapEnvelope
-	if err := xml.Unmarshal(soapXML, &env); err != nil {
-		return ""
-	}
-	// env.Body.Inner is e.g. `<result>CIPHER</result>` or `<result><NESingleResponse>...</NESingleResponse></result>`
-	// Decode the first element and grab its innerxml
-	dec := xml.NewDecoder(bytes.NewReader(env.Body.Inner))
+	dec := xml.NewDecoder(bytes.NewReader(soapXML))
+	depth := 0
+	inBody := false
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			break
 		}
-		if se, ok := tok.(xml.StartElement); ok {
-			var inner struct {
-				Inner []byte `xml:",innerxml"`
+		switch t := tok.(type) {
+		case xml.StartElement:
+			local := strings.ToLower(t.Name.Local)
+			if local == "body" {
+				inBody = true
+				continue
 			}
-			if err := dec.DecodeElement(&inner, &se); err == nil {
-				return strings.TrimSpace(string(inner.Inner))
+			if inBody {
+				depth++
+				// depth==2 is the <return> element inside the response wrapper
+				if depth == 2 && local == "return" {
+					var inner struct {
+						Inner []byte `xml:",innerxml"`
+					}
+					if err := dec.DecodeElement(&inner, &t); err == nil {
+						return html.UnescapeString(strings.TrimSpace(string(inner.Inner)))
+					}
+				}
 			}
-			break
+		case xml.EndElement:
+			if strings.ToLower(t.Name.Local) == "body" {
+				return ""
+			}
+			if inBody && depth > 0 {
+				depth--
+			}
 		}
 	}
-	return strings.TrimSpace(string(env.Body.Inner))
+	return ""
 }
 
 func serializeXML(v any) (string, error) {
@@ -213,7 +228,7 @@ func (s *nipSoapClient) execute(ctx context.Context, url, parentElement string, 
 	xmlMsg, err := serializeXML(req)
 	if err != nil {
 		slog.Error("nip.xml_serialization_failed", "error", err)
-		return "", utils.NewNipError(utils.NipInternalServerError, err)
+		return "", utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	slog.Debug("nip.step_serialize_xml_success", "xml_msg", xmlMsg)
 
@@ -222,7 +237,7 @@ func (s *nipSoapClient) execute(ctx context.Context, url, parentElement string, 
 	encrypted, err := s.post(ctx, s.config.encryptURL(), encryptEnvelope)
 	if err != nil {
 		slog.Error("nip.step_encrypt_failed", "error", err)
-		return "", utils.NewNipError(utils.NipInternalServerError, err)
+		return "", utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	slog.Debug("nip.step_encrypt_success", "encrypted_result", encrypted)
 
@@ -231,7 +246,7 @@ func (s *nipSoapClient) execute(ctx context.Context, url, parentElement string, 
 	nipResp, err := s.post(ctx, url, nipEnvelope)
 	if err != nil {
 		slog.Error("nip.step_nip_request_failed", "nip_url", url, "error", err)
-		return "", utils.NewNipError(utils.NipInternalServerError, err)
+		return "", utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	slog.Debug("nip.step_nip_request_success", "nip_url", url, "nip_response", nipResp)
 
@@ -240,7 +255,7 @@ func (s *nipSoapClient) execute(ctx context.Context, url, parentElement string, 
 	decrypted, err := s.post(ctx, s.config.decryptURL(), decryptEnvelope)
 	if err != nil {
 		slog.Error("nip.step_decrypt_failed", "error", err)
-		return "", utils.NewNipError(utils.NipInternalServerError, err)
+		return "", utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	slog.Debug("nip.step_decrypt_success", "decrypted_result", decrypted)
 
@@ -283,7 +298,7 @@ func (svc *NIBSSNIPService) ExecuteNameEnquiry(ctx context.Context, req *models.
 	resp, err := deserializeXML[models.NESingleResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.name_enquiry.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	return resp, nil
 }
@@ -299,7 +314,7 @@ func (svc *NIBSSNIPService) ExecuteMandateAdvice(ctx context.Context, req *model
 	resp, err := deserializeXML[models.MandateAdviceResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.mandate_advice.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	if err := svc.checkResponseCode(resp.ResponseCode, "mandate advice"); err != nil {
 		slog.Error("nip.mandate_advice.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
@@ -320,7 +335,7 @@ func (svc *NIBSSNIPService) ExecuteBalanceEnquiry(ctx context.Context, req *mode
 	resp, err := deserializeXML[models.BalanceEnquiryResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.balance_enquiry.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	if err := svc.checkResponseCode(resp.ResponseCode, "balance enquiry"); err != nil {
 		slog.Error("nip.balance_enquiry.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
@@ -341,7 +356,7 @@ func (svc *NIBSSNIPService) ExecuteFundsTransferDebit(ctx context.Context, req *
 	resp, err := deserializeXML[models.FTSingleDebitResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.ft_debit.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	if err := svc.checkResponseCode(resp.ResponseCode, "funds transfer debit"); err != nil {
 		slog.Error("nip.ft_debit.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
@@ -362,7 +377,7 @@ func (svc *NIBSSNIPService) ExecuteFundsTransferCredit(ctx context.Context, req 
 	resp, err := deserializeXML[models.FTSingleCreditResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.ft_credit.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	if err := svc.checkResponseCode(resp.ResponseCode, "funds transfer credit"); err != nil {
 		slog.Error("nip.ft_credit.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
@@ -383,7 +398,7 @@ func (svc *NIBSSNIPService) ExecuteTransactionStatusQuery(ctx context.Context, r
 	resp, err := deserializeXML[models.TSQuerySingleResponse](decrypted)
 	if err != nil {
 		slog.Error("nip.tsq.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
-		return nil, utils.NewNipError(utils.NipInternalServerError, err)
+		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
 	if err := svc.checkResponseCode(resp.ResponseCode, "transaction status query"); err != nil {
 		slog.Error("nip.tsq.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
@@ -394,19 +409,19 @@ func (svc *NIBSSNIPService) ExecuteTransactionStatusQuery(ctx context.Context, r
 }
 
 func (svc *NIBSSNIPService) checkResponseCode(code, action string) error {
-	if code == string(utils.NipApproved) {
+	if code == string(utils.NIPResponseCode("00")) {
 		return nil
 	}
 	if code == "" {
-		return utils.NewNipErrorMsg(utils.NipInternalServerError, action+" returned empty response code")
+		return utils.NewNIPErrorMsg(utils.NIPResponseCode("99"), action+" returned empty response code")
 	}
-	return utils.NewNipError(utils.NipResponseCode(code))
+	return utils.NewNIPError(utils.NIPResponseCode(code))
 }
 
 func (svc *NIBSSNIPService) wrapErr(err error, action string) error {
-	if _, ok := err.(*utils.NipError); ok {
+	if _, ok := err.(*utils.NIPError); ok {
 		return err
 	}
 	slog.Error("NIP unexpected error", "action", action, "error", err)
-	return utils.NewNipError(utils.NipInternalServerError, err)
+	return utils.NewNIPError(utils.NIPResponseCode("99"), err)
 }

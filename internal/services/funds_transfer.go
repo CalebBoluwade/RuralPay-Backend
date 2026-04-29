@@ -70,7 +70,7 @@ func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string,
 		// XMLName: ,
 		SessionID:      sessionId,
 		ChannelCode:    "1",
-		Amount:         fmt.Sprintf("%.2f", float64(req.Amount)),
+		Amount:         fmt.Sprintf("%d", req.Amount),
 		TransactionFee: "0.00",
 		Narration:      req.Narration,
 
@@ -89,9 +89,6 @@ func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string,
 
 		TransactionLocation: fmt.Sprintf("%v,%v", req.Location.Latitude, req.Location.Longitude),
 		PaymentReference:    fmt.Sprintf("%s/%s", s.NIPService.GetNIPPaymentPrefix(), user.DebitMandateCode),
-		// 		FromAccount:         fromAccount,
-		// BeneficiaryAccount:  toAccount,
-		// BeneficiaryBankCode: bankCode,
 	})
 
 	if err != nil {
@@ -108,7 +105,7 @@ func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string,
 			DestinationInstitutionCode: req.Metadata["toBankCode"].(string),
 			DebitAccountNumber:         req.FromAccount,
 			//    req.BeneficiaryAccountNumber,
-			Amount:    fmt.Sprintf("%.2f", req.Amount),
+			Amount:    fmt.Sprintf("%d", req.Amount),
 			Narration: fmt.Sprintf("Transfer from %s", req.FromAccount),
 		})
 

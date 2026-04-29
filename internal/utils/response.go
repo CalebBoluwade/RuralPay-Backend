@@ -95,122 +95,82 @@ func SendSuccessResponse(w http.ResponseWriter, message ResponseMessage, details
 	json.NewEncoder(w).Encode(successResp)
 }
 
-// NipResponseCode represents NIBSS NIP response codes
-type NipResponseCode string
+// NIPResponseCode represents NIBSS NIP response codes
+type NIPResponseCode string
 
-const (
-	NipApproved                         NipResponseCode = "00"
-	NipStatusUnknown                    NipResponseCode = "01"
-	NipInvalidSender                    NipResponseCode = "03"
-	NipDoNotHonor                       NipResponseCode = "05"
-	NipDormantAccount                   NipResponseCode = "06"
-	NipInvalidAccount                   NipResponseCode = "07"
-	NipAccountNameMismatch              NipResponseCode = "08"
-	NipProcessing                       NipResponseCode = "09"
-	NipInvalidTransaction               NipResponseCode = "12"
-	NipInvalidAmount                    NipResponseCode = "13"
-	NipInvalidBatchNumber               NipResponseCode = "14"
-	NipInvalidSessionRecordID           NipResponseCode = "15"
-	NipUnknownBankCode                  NipResponseCode = "16"
-	NipInvalidChannel                   NipResponseCode = "17"
-	NipWrongMethodCall                  NipResponseCode = "18"
-	NipNoActionTaken                    NipResponseCode = "21"
-	NipUnableToLocateRecord             NipResponseCode = "25"
-	NipDuplicateRecord                  NipResponseCode = "26"
-	NipFormatError                      NipResponseCode = "30"
-	NipSuspectedFraud                   NipResponseCode = "34"
-	NipContactSendingBank               NipResponseCode = "35"
-	NipNoSufficientFunds                NipResponseCode = "51"
-	NipTransactionNotPermittedOnSender  NipResponseCode = "57"
-	NipTransactionNotPermittedOnChannel NipResponseCode = "58"
-	NipTransferLimitExceeded            NipResponseCode = "61"
-	NipSecurityViolation                NipResponseCode = "63"
-	NipExceedsWithdrawalFrequency       NipResponseCode = "65"
-	NipResponseTooLate                  NipResponseCode = "68"
-	NipUnsuccessfulAccountAmountBlock   NipResponseCode = "69"
-	NipUnsuccessfulAccountAmountUnblock NipResponseCode = "70"
-	NipEmptyMandateRef                  NipResponseCode = "71"
-	NipBeneficiaryBankUnavailable       NipResponseCode = "91"
-	NipRoutingError                     NipResponseCode = "92"
-	NipDuplicateTransaction             NipResponseCode = "94"
-	NipSystemMalfunction                NipResponseCode = "96"
-	NipTimeoutWaitingForResponse        NipResponseCode = "97"
-	NipInternalServerError              NipResponseCode = "99"
-)
-
-var nipResponseDescriptions = map[NipResponseCode]string{
-	NipApproved:                         "Approved or completed successfully",
-	NipStatusUnknown:                    "Status unknown, please wait for settlement report",
-	NipInvalidSender:                    "Invalid Sender",
-	NipDoNotHonor:                       "Do not honor",
-	NipDormantAccount:                   "Dormant Account",
-	NipInvalidAccount:                   "Invalid Account",
-	NipAccountNameMismatch:              "Account Name Mismatch",
-	NipProcessing:                       "Request processing in progress",
-	NipInvalidTransaction:               "Invalid transaction",
-	NipInvalidAmount:                    "Invalid Amount",
-	NipInvalidBatchNumber:               "Invalid Batch Number",
-	NipInvalidSessionRecordID:           "Invalid Session or Record ID",
-	NipUnknownBankCode:                  "Unknown Bank Code",
-	NipInvalidChannel:                   "Invalid Channel",
-	NipWrongMethodCall:                  "Wrong Method Call",
-	NipNoActionTaken:                    "No action taken",
-	NipUnableToLocateRecord:             "Unable to locate record",
-	NipDuplicateRecord:                  "Duplicate record",
-	NipFormatError:                      "Format error",
-	NipSuspectedFraud:                   "Suspected fraud",
-	NipContactSendingBank:               "Contact sending bank",
-	NipNoSufficientFunds:                "No sufficient funds",
-	NipTransactionNotPermittedOnSender:  "Transaction not permitted to sender",
-	NipTransactionNotPermittedOnChannel: "Transaction not permitted on channel",
-	NipTransferLimitExceeded:            "Transfer limit Exceeded",
-	NipSecurityViolation:                "Security violation",
-	NipExceedsWithdrawalFrequency:       "Exceeds withdrawal frequency",
-	NipResponseTooLate:                  "Response received too late",
-	NipUnsuccessfulAccountAmountBlock:   "Unsuccessful Account/Amount block",
-	NipUnsuccessfulAccountAmountUnblock: "Unsuccessful Account/Amount unblock",
-	NipEmptyMandateRef:                  "Empty Mandate Reference Number",
-	NipBeneficiaryBankUnavailable:       "Beneficiary Bank not available",
-	NipRoutingError:                     "Routing error",
-	NipDuplicateTransaction:             "Duplicate transaction",
-	NipSystemMalfunction:                "System malfunction",
-	NipTimeoutWaitingForResponse:        "Timeout waiting for response from destination",
-	NipInternalServerError:              "Error occurred while sending request",
+var nipResponseDescriptions = map[NIPResponseCode]string{
+	"00": "Approved Or Completed Successfully",
+	"01": "Status Unknown, Please Wait For Settlement Report",
+	"03": "Invalid Sender",
+	"05": "Do Not Honor",
+	"06": "Dormant Account",
+	"07": "Invalid Account",
+	"08": "Account Name Mismatch",
+	"09": "Request Processing In Progress",
+	"12": "Invalid Transaction",
+	"13": "Invalid Amount",
+	"14": "Invalid Batch Number",
+	"15": "Invalid Session Or Record ID",
+	"16": "Unknown Bank Code",
+	"17": "Invalid Channel",
+	"18": "Wrong Method Call",
+	"21": "No Action Taken",
+	"25": "Unable To Locate Record",
+	"26": "Duplicate Record",
+	"30": "Format Error",
+	"34": "Suspected Fraud",
+	"35": "Contact Sending Bank",
+	"51": "No Sufficient Funds",
+	"57": "Transaction Not Permitted To Sender",
+	"58": "Transaction Not Permitted On Channel",
+	"61": "Transfer Limit Exceeded",
+	"63": "Security Violation",
+	"65": "Exceeds Withdrawal Frequency",
+	"68": "Response Received Too Late",
+	"69": "Unsuccessful Account/Amount Block",
+	"70": "Unsuccessful Account/Amount Unblock",
+	"71": "Empty Mandate Reference Number",
+	"91": "Beneficiary Bank Not Available",
+	"92": "Routing Error",
+	"94": "Duplicate Transaction",
+	"96": "System Malfunction",
+	"97": "Timeout Waiting For Response From Destination",
+	"99": "Error Occurred While Sending Request",
 }
 
-func (c NipResponseCode) Description() string {
+func (c NIPResponseCode) Description() string {
 	if desc, ok := nipResponseDescriptions[c]; ok {
 		return desc
 	}
 	return fmt.Sprintf("Unknown NIP response code: %s", string(c))
 }
 
-// NipError is a typed error carrying a NipResponseCode
-type NipError struct {
-	Code    NipResponseCode
+// NIPError is a typed error carrying a NIPResponseCode
+type NIPError struct {
+	Code    NIPResponseCode
 	Message string
 	Cause   error
 }
 
-func (e *NipError) Error() string {
+func (e *NIPError) Error() string {
 	if e.Message != "" {
 		return e.Message
 	}
 	return e.Code.Description()
 }
 
-func (e *NipError) Unwrap() error { return e.Cause }
+func (e *NIPError) Unwrap() error { return e.Cause }
 
-func NewNipError(code NipResponseCode, cause ...error) *NipError {
-	e := &NipError{Code: code}
+func NewNIPError(code NIPResponseCode, cause ...error) *NIPError {
+	e := &NIPError{Code: code}
 	if len(cause) > 0 {
 		e.Cause = cause[0]
 	}
 	return e
 }
 
-func NewNipErrorMsg(code NipResponseCode, msg string, cause ...error) *NipError {
-	e := &NipError{Code: code, Message: msg}
+func NewNIPErrorMsg(code NIPResponseCode, msg string, cause ...error) *NIPError {
+	e := &NIPError{Code: code, Message: msg}
 	if len(cause) > 0 {
 		e.Cause = cause[0]
 	}

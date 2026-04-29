@@ -14,7 +14,7 @@ import (
 	"github.com/ruralpay/backend/internal/utils"
 )
 
-const acmt023ErrorMsg = "Acmt023 name enquiry failed: %w"
+const acmt023ErrorMsg = "Acmt023 Name Enquiry Failed: %w"
 
 // NameEnquiryResult is the normalised output of any name enquiry call.
 type NameEnquiryResult struct {
@@ -34,7 +34,7 @@ type NameEnquiryService interface {
 // NewNameEnquiryService returns the default NameEnquiryService.
 // Swap the returned implementation here without touching any caller.
 func NewNameEnquiryService(redis *redis.Client) NameEnquiryService {
-	return newNipNameEnquiry(redis)
+	return newNIPNameEnquiry(redis)
 }
 
 // --- NIP implementation (internal) ---
@@ -44,7 +44,7 @@ type NIPNameEnquiry struct {
 	NIPService *NIBSSNIPService
 }
 
-func newNipNameEnquiry(redis *redis.Client) NameEnquiryService {
+func newNIPNameEnquiry(redis *redis.Client) NameEnquiryService {
 	return &NIPNameEnquiry{Redis: redis, NIPService: NewNIBSSNIPService()}
 }
 
@@ -55,30 +55,25 @@ func (s *NIPNameEnquiry) EnquireName(ctx context.Context, accountNumber, bankCod
 		ChannelCode:                "1",
 		AccountNumber:              accountNumber,
 	})
-
 	if err != nil {
-		return nil, fmt.Errorf("NIP name enquiry failed: %w", err)
+		return nil, fmt.Errorf("NIP Name Enquiry Failed For Account -> [%s] And Bank Code -> [%s]: %w", accountNumber, bankCode, err)
 	}
 
 	if resp.ResponseCode != "00" {
-		slog.Error("nip.name_enquiry.failed", "account", accountNumber, "bank_code", bankCode, "response_code", resp.ResponseCode)
-		return nil, fmt.Errorf("NIP name enquiry failed: %s - %s", resp.ResponseCode)
+		slog.Error("NIP.NameEnquiry.Failed", "account", accountNumber, "bank_code", bankCode, "response_code", resp.ResponseCode)
+		return nil, utils.NewNIPError(utils.NIPResponseCode(resp.ResponseCode))
 	}
 
 	if s.Redis != nil {
-		// Cache Name Enquiry Details For The Transaction
-		err := s.Redis.HSet(ctx, fmt.Sprintf(constants.UserTransactionMetadataKeyPrefix, resp.SessionID), map[string]interface{}{
+		err := s.Redis.HSet(ctx, fmt.Sprintf(constants.UserTransactionMetadataKeyPrefix, resp.SessionID), map[string]any{
 			"AccountName":   resp.AccountName,
 			"AccountNumber": resp.AccountNumber,
 			"BankCode":      resp.DestinationInstitutionCode,
 			"BVN":           resp.BankVerificationNumber,
 			"KYCLevel":      resp.KYCLevel,
-			// "MandateCode": resp.MandateCode,
 		}).Err()
-		// Add other relevant fields as needed
 		if err != nil {
-			slog.Error("name_enquiry.redis_cache_failed", "account", accountNumber, "bank_code", bankCode, "error", err)
-			// Proceed without caching if Redis fails
+			slog.Error("NIP.NameEnquiry.RedisCacheFailed", "account", accountNumber, "bank_code", bankCode, "error", err)
 		}
 	}
 

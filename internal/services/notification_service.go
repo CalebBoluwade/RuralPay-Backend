@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -105,21 +106,23 @@ func (ns *NotificationService) GetUserNotifications(w http.ResponseWriter, r *ht
 	utils.SendSuccessResponse(w, utils.ResponseMessage(fmt.Sprintf("%d Notifications Found", len(notifications))), notifications, http.StatusOK)
 }
 
-func (ns *NotificationService) SendPaymentNotification(transaction *models.TransactionRecord, user *models.User, notifType models.NotificationType) error {
-	payload := ns.buildPaymentPayload(transaction, user, notifType)
+func (ns *NotificationService) SendPaymentNotification(ctx context.Context, transaction *models.TransactionRecord, notifType models.NotificationType) error {
+	payload := ns.buildPaymentPayload(4, transaction, notifType)
 	return ns.Route(payload)
 }
 
 func (ns *NotificationService) Route(payload *models.NotificationPayload) error {
 	slog.Info("notification.routing", "user_id", payload.UserID, "title", payload.Title)
 
-	if payload.ExpoPushToken != "" {
-		slog.Info("notification.dispatch", "channel", "push", "user_id", payload.UserID)
-		go ns.sendPush(payload)
-	}
+	user := ns.getUserPreferences(context.Background(), payload.UserID)
 
-	for _, channel := range payload.Preferences {
+	for _, channel := range user.Notifications.PreferredChannels {
 		switch channel {
+		case models.ChannelPush:
+			if payload.ExpoPushToken != "" {
+				slog.Info("notification.dispatch", "channel", "push", "user_id", payload.UserID)
+				go ns.sendPush(payload)
+			}
 		case models.ChannelEmail:
 			if payload.Email != "" {
 				slog.Info("notification.dispatch", "channel", "email", "email", payload.Email)
@@ -365,7 +368,7 @@ func (ns *NotificationService) sendSMSNotificationAlert(payload *models.Notifica
 	return nil
 }
 
-func (ns *NotificationService) buildPaymentPayload(transaction *models.TransactionRecord, user *models.User, notifType models.NotificationType) *models.NotificationPayload {
+func (ns *NotificationService) buildPaymentPayload(userId int, transaction *models.TransactionRecord, notifType models.NotificationType) *models.NotificationPayload {
 	var title, body string
 
 	switch notifType {
@@ -391,6 +394,7 @@ func (ns *NotificationService) buildPaymentPayload(transaction *models.Transacti
 	}
 
 	slog.Info("notification.payload.building", "transaction_id", transaction.TransactionID, "status", transaction.Status, "type", notifType)
+	user := ns.getUserPreferences(context.Background(), userId)
 
 	return &models.NotificationPayload{
 		Type:          notifType,
@@ -415,7 +419,6 @@ func (ns *NotificationService) buildPaymentPayload(transaction *models.Transacti
 			"reference":           fmt.Sprintf("%v", transaction.Metadata["reference"]),
 			"date":                transaction.CreatedAt.Format("02 Jan 2006, 03:04 PM"),
 		},
-		Preferences: getUserPreferences(user),
 	}
 }
 
@@ -548,7 +551,55 @@ func (ns *NotificationService) SendDeleteAccountEmail(user *models.User) error {
 	return nil
 }
 
-func getUserPreferences(user *models.User) []models.NotificationChannel {
-	// Default preferences - can be extended to read from user settings
-	return []models.NotificationChannel{models.ChannelEmail, models.ChannelSMS}
+func (ns *NotificationService) getUserPreferences(ctx context.Context, id int) *models.User {
+	user := &models.User{ID: id}
+	var pushToken sql.NullString
+	var nDevicePush, nSMS, nEmail sql.NullBool
+
+	var channels []models.NotificationChannel
+
+	err := ns.db.QueryRowContext(ctx, `
+		SELECT u.email, u.phone_number, u.push_token, u.first_name,
+		       n.use_device_push, n.use_sms, n.use_email
+		FROM users u
+		LEFT JOIN notifications n ON n.user_id = u.id
+		WHERE u.id = $1
+	`, id).Scan(&user.Email, &user.PhoneNumber, &pushToken, &user.FirstName,
+		&nDevicePush, &nSMS, &nEmail)
+
+	if err != nil {
+		slog.Error("payment.fetch_user_failed", "user_id", id, "error", err)
+
+		user.Notifications.PreferredChannels = []models.NotificationChannel{models.ChannelEmail}
+
+		return user
+	}
+
+	user.ExpoPushToken = pushToken.String
+	user.Notifications = models.UserNotifications{
+		UserID:     id,
+		DevicePush: nDevicePush.Bool,
+		SMS:        nSMS.Bool,
+		Email:      nEmail.Bool,
+	}
+
+	slog.Info("notification.user_preferences.fetched", "user_id", user.ID, "push", user.Notifications.DevicePush, "sms", user.Notifications.SMS, "email", user.Notifications.Email)
+
+	if user.Notifications.DevicePush && user.ExpoPushToken != "" {
+		channels = append(channels, models.ChannelPush)
+	}
+	if user.Notifications.Email {
+		channels = append(channels, models.ChannelEmail)
+	}
+	if user.Notifications.SMS {
+		channels = append(channels, models.ChannelSMS)
+	}
+	if len(channels) == 0 {
+		slog.Warn("notification.preferences.none_set", "user_id", user.Notifications.UserID)
+		channels = []models.NotificationChannel{models.ChannelEmail}
+	}
+
+	user.Notifications.PreferredChannels = channels
+
+	return user
 }

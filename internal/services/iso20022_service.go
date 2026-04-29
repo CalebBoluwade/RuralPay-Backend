@@ -180,6 +180,9 @@ func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_
 		}
 	}
 
+	if iso.nibssClient == nil {
+		return models.SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: NIBSS client not configured")
+	}
 	pacs002, err := iso.nibssClient.ProcessFundsTransferSettlement(ctx, payload)
 	if err != nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
@@ -364,6 +367,9 @@ func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMs
 		return models.SettlementResult{}, fmt.Errorf("failed to convert pacs.028 to XML: %w", err)
 	}
 
+	if iso.nibssClient == nil {
+		return models.SettlementResult{}, fmt.Errorf("failed to request payment status: NIBSS client not configured")
+	}
 	pacs002, err := iso.nibssClient.RequestPaymentStatus(ctx, []byte(xmlData))
 	if err != nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to request payment status: %w", err)

@@ -27,6 +27,7 @@ logs/
 
 # Coverage
 coverage.txt
+coverage.html
 coverage.out
 
 # OS

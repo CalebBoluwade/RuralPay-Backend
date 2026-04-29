@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testNipServer spins up a fake SOAP server that returns canned responses.
-// responses are the innerText values returned for each call in order (encrypt, nip, decrypt).
+// testNipServer spins up a fake SOAP server matching the real NIBSS response structure:
+// <S:Body><ns2:XxxResponse><return>CONTENT</return></ns2:XxxResponse></S:Body>
 func testNipServer(t *testing.T, responses ...string) (*httptest.Server, func()) {
 	t.Helper()
 	idx := 0
@@ -26,16 +26,17 @@ func testNipServer(t *testing.T, responses ...string) (*httptest.Server, func())
 			idx++
 		}
 		w.Header().Set("Content-Type", "text/xml")
-		// Wrap in a result element so innerxml extraction works for both plain text and XML
 		fmt.Fprintf(w,
-			`<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">`+
-				`<soapenv:Body><result>%s</result></soapenv:Body>`+
-				`</soapenv:Envelope>`, body)
+			`<S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/">`+
+				`<S:Body><ns2:Response xmlns:ns2="http://core.nip.nibss/">`+
+				`<return>%s</return>`+
+				`</ns2:Response></S:Body>`+
+				`</S:Envelope>`, body)
 	}))
 	return srv, srv.Close
 }
 
-func testNipErrorServer(t *testing.T, statusCode int, faultMsg string) (*httptest.Server, func()) {
+func testNIPErrorServer(t *testing.T, statusCode int, faultMsg string) (*httptest.Server, func()) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/xml")
@@ -105,16 +106,13 @@ func TestExecuteNameEnquiry_NonSuccessResponseCode(t *testing.T) {
 	req := &models.NESingleRequest{SessionID: "hey", DestinationInstitutionCode: "999100", ChannelCode: "1", AccountNumber: "0035428391"}
 
 	_, err := svc.ExecuteNameEnquiry(context.Background(), req)
-	require.Error(t, err)
-
-	var nipErr *utils.NipError
-	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipSystemMalfunction, nipErr.Code)
-	assert.Equal(t, utils.NipSystemMalfunction.Description(), nipErr.Error())
+	// ExecuteNameEnquiry returns the response without checking the code —
+	// response code checking is the caller's responsibility (e.g. NIPNameEnquiry.EnquireName)
+	require.NoError(t, err)
 }
 
 func TestExecuteNameEnquiry_HttpError(t *testing.T) {
-	srv, close := testNipErrorServer(t, http.StatusInternalServerError, "internal error")
+	srv, close := testNIPErrorServer(t, http.StatusInternalServerError, "internal error")
 	defer close()
 
 	svc := newTestNipService(srv.URL)
@@ -123,7 +121,7 @@ func TestExecuteNameEnquiry_HttpError(t *testing.T) {
 	_, err := svc.ExecuteNameEnquiry(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	assert.True(t, errors.As(err, &nipErr))
 }
 
@@ -136,13 +134,9 @@ func TestExecuteNameEnquiry_EmptyResponseCode(t *testing.T) {
 	svc := newTestNipService(srv.URL)
 	req := &models.NESingleRequest{SessionID: "hey", DestinationInstitutionCode: "999100", ChannelCode: "1", AccountNumber: "0035428391"}
 
-	_, err := svc.ExecuteNameEnquiry(context.Background(), req)
-	require.Error(t, err)
-
-	var nipErr *utils.NipError
-	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipInternalServerError, nipErr.Code)
-	assert.Contains(t, nipErr.Error(), "name enquiry")
+	resp, err := svc.ExecuteNameEnquiry(context.Background(), req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.ResponseCode)
 }
 
 // --- Mandate Advice ---
@@ -183,13 +177,13 @@ func TestExecuteMandateAdvice_FailResponseCode(t *testing.T) {
 	_, err := svc.ExecuteMandateAdvice(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipSystemMalfunction, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("96"), nipErr.Code)
 }
 
 func TestExecuteMandateAdvice_HttpError(t *testing.T) {
-	srv, close := testNipErrorServer(t, http.StatusInternalServerError, "server error")
+	srv, close := testNIPErrorServer(t, http.StatusInternalServerError, "server error")
 	defer close()
 
 	svc := newTestNipService(srv.URL)
@@ -198,9 +192,9 @@ func TestExecuteMandateAdvice_HttpError(t *testing.T) {
 	_, err := svc.ExecuteMandateAdvice(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	assert.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipInternalServerError, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("99"), nipErr.Code)
 }
 
 // --- Balance Enquiry ---
@@ -241,13 +235,13 @@ func TestExecuteBalanceEnquiry_FailResponseCode(t *testing.T) {
 	_, err := svc.ExecuteBalanceEnquiry(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipSystemMalfunction, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("96"), nipErr.Code)
 }
 
 func TestExecuteBalanceEnquiry_HttpError(t *testing.T) {
-	srv, close := testNipErrorServer(t, http.StatusInternalServerError, "timeout")
+	srv, close := testNIPErrorServer(t, http.StatusInternalServerError, "timeout")
 	defer close()
 
 	svc := newTestNipService(srv.URL)
@@ -256,7 +250,7 @@ func TestExecuteBalanceEnquiry_HttpError(t *testing.T) {
 	_, err := svc.ExecuteBalanceEnquiry(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	assert.True(t, errors.As(err, &nipErr))
 }
 
@@ -280,24 +274,24 @@ func TestGenerateMandateRef(t *testing.T) {
 
 func TestGenerateMandateRef_DefaultPrefix(t *testing.T) {
 	ref := utils.GenerateMandateRef("")
-	assert.Contains(t, ref, "NPP/")
+	assert.Contains(t, ref, "RYLPAY/")
 }
 
 func TestGetNipBankCode(t *testing.T) {
 	svc := newTestNipService("http://localhost")
-	assert.Equal(t, "999999", svc.GetNipBankCode())
+	assert.Equal(t, "999999", svc.GetNIPBankCode())
 }
 
-func TestNipResponseCode_Description(t *testing.T) {
-	assert.Equal(t, "Approved or completed successfully", utils.NipApproved.Description())
-	assert.Equal(t, "System malfunction", utils.NipSystemMalfunction.Description())
-	assert.Equal(t, "No sufficient funds", utils.NipNoSufficientFunds.Description())
-	assert.Contains(t, utils.NipResponseCode("XX").Description(), "Unknown")
+func TestNIPResponseCode_Description(t *testing.T) {
+	assert.Equal(t, "Approved Or Completed Successfully", utils.NIPResponseCode("00").Description())
+	assert.Equal(t, "System Malfunction", utils.NIPResponseCode("96").Description())
+	assert.Equal(t, "No Sufficient Funds", utils.NIPResponseCode("51").Description())
+	assert.Contains(t, utils.NIPResponseCode("XX").Description(), "Unknown")
 }
 
-func TestNipError_Unwrap(t *testing.T) {
+func TestNIPError_Unwrap(t *testing.T) {
 	cause := errors.New("root cause")
-	err := utils.NewNipError(utils.NipInternalServerError, cause)
+	err := utils.NewNIPError(utils.NIPResponseCode("99"), cause)
 	assert.Equal(t, cause, errors.Unwrap(err))
 }
 
@@ -343,9 +337,9 @@ func TestExecuteFundsTransferDebit_FailResponseCode(t *testing.T) {
 	_, err := svc.ExecuteFundsTransferDebit(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipNoSufficientFunds, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("51"), nipErr.Code)
 }
 
 // --- Funds Transfer Credit ---
@@ -388,9 +382,9 @@ func TestExecuteFundsTransferCredit_FailResponseCode(t *testing.T) {
 	_, err := svc.ExecuteFundsTransferCredit(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipBeneficiaryBankUnavailable, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("91"), nipErr.Code)
 }
 
 // --- Transaction Status Query ---
@@ -434,9 +428,9 @@ func TestExecuteTransactionStatusQuery_FailResponseCode(t *testing.T) {
 	_, err := svc.ExecuteTransactionStatusQuery(context.Background(), req)
 	require.Error(t, err)
 
-	var nipErr *utils.NipError
+	var nipErr *utils.NIPError
 	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NipUnableToLocateRecord, nipErr.Code)
+	assert.Equal(t, utils.NIPResponseCode("25"), nipErr.Code)
 }
 
 func splitMandateRef(ref string) []string {

@@ -106,10 +106,8 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	response, err := provider.ProcessPayment(ctx, &req)
 	if err != nil {
 		go func() {
-			user := base.fetchUserForNotification(userID)
-
 			// Sender
-			err := base.notificationSVC.SendPaymentNotification(&models.TransactionRecord{
+			err := base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
 				TransactionID: req.TransactionID,
 				FromAccountID: req.FromAccount,
 				ToAccountID:   req.BeneficiaryAccountNumber,
@@ -122,7 +120,7 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 					"paymentMode":         req.PaymentMode,
 					"beneficiaryBankName": req.BeneficiaryBankName,
 				},
-			}, user, models.PaymentFailed)
+			}, models.PaymentFailed)
 
 			if err != nil {
 				slog.Error("Failed To Send Transaction Notification", "err", err)
@@ -149,10 +147,8 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	slog.Info("payment.handle.processed", "tx_id", req.TransactionID, "success", response.Success, "status", response.Status)
 
 	go func() {
-		user := base.fetchUserForNotification(userID)
-
 		// Sender
-		err = base.notificationSVC.SendPaymentNotification(&models.TransactionRecord{
+		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
 			TransactionID: req.TransactionID,
 			FromAccountID: req.FromAccount,
 			ToAccountID:   req.BeneficiaryAccountNumber,
@@ -166,10 +162,10 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 				"beneficiaryBankName": req.BeneficiaryBankName,
 				"reference":           response.Reference,
 			},
-		}, user, models.PaymentSent)
+		}, models.PaymentSent)
 
 		// Receiver (If A Rural Pay User)
-		err = base.notificationSVC.SendPaymentNotification(&models.TransactionRecord{
+		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
 			TransactionID: req.TransactionID,
 			FromAccountID: req.FromAccount,
 			ToAccountID:   req.BeneficiaryAccountNumber,
@@ -185,7 +181,7 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 				"beneficiaryBankName": req.BeneficiaryBankName,
 				"reference":           response.Reference,
 			},
-		}, user, models.PaymentReceived)
+		}, models.PaymentReceived)
 
 		if err != nil {
 			slog.Error("Failed To Send Transaction Notification", "err", err)
@@ -198,21 +194,6 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 		slog.Warn("payment.handle.unsuccessful", "tx_id", req.TransactionID, "message", response.Message)
 		utils.SendErrorResponse(w, response.Message, http.StatusBadRequest, nil)
 	}
-}
-
-func (base *BasePaymentProvider) fetchUserForNotification(id int) *models.User {
-	user := &models.User{ID: id}
-	var pushToken sql.NullString
-	err := base.DB.QueryRow(`
-		SELECT email, phone_number, push_token, first_name
-		FROM users WHERE id = $1
-	`, id).Scan(&user.Email, &user.PhoneNumber, &pushToken, &user.FirstName)
-	if err != nil {
-		slog.Error("payment.fetch_user_failed", "user_id", id, "error", err)
-		return user
-	}
-	user.ExpoPushToken = pushToken.String
-	return user
 }
 
 func (base *BasePaymentProvider) checkIdempotency(ctx context.Context, txID string) (models.TransactionStatus, bool) {

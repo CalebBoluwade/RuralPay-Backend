@@ -83,6 +83,8 @@ func init() {
 	_ = viper.BindEnv("nip.tsq_base_url", "NIP_TSQ_BASE_URL")
 	_ = viper.BindEnv("nip.timeout_seconds", "NIP_TIMEOUT_SECONDS")
 	viper.SetDefault("nip.timeout_seconds", 60)
+	_ = viper.BindEnv("nip.response_codes_path", "NIP_RESPONSE_CODES_PATH")
+	viper.SetDefault("nip.response_codes_path", "./internal/config/nip_response_codes.json")
 
 	// ISO 20022 signing keys
 	_ = viper.BindEnv("iso20022.signing_key_path", "ISO20022_SIGNING_KEY_PATH")

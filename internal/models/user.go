@@ -54,12 +54,12 @@ type AuthResponse struct {
 	User         User   `json:"user"`                                                           // User information
 }
 
-type Channel string
+type TwoFactorChannel string
 
 const (
-	ChannelOTP               Channel = "OTP"
-	ChannelBypass            Channel = "BYPASS"
-	ChannelFacialRecognition Channel = "FACIAL_RECOGNITION"
+	ChannelOTP               TwoFactorChannel = "OTP"
+	ChannelBypass            TwoFactorChannel = "BYPASS"
+	ChannelFacialRecognition TwoFactorChannel = "FACIAL_RECOGNITION"
 )
 
 type UserTransactionLimits struct {
@@ -68,10 +68,11 @@ type UserTransactionLimits struct {
 }
 
 type UserNotifications struct {
-	UserID     int  `json:"userId"`
-	SMS        bool `json:"sms"`
-	Email      bool `json:"email"`
-	DevicePush bool `json:"devicePush"`
+	UserID            int                   `json:"userId"`
+	SMS               bool                  `json:"sms"`
+	Email             bool                  `json:"email"`
+	DevicePush        bool                  `json:"devicePush"`
+	PreferredChannels []NotificationChannel `json:"preferredChannels"`
 }
 
 // User represents the user model

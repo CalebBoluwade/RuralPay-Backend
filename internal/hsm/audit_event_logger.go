@@ -175,7 +175,31 @@ func (audit *AuditLogger) LogFailedTransaction(ctx context.Context, event models
 	return nil
 }
 
-// func (audit *AuditLogger) LogOperation(transactionId, accountID, operation, details string) {
+func (audit *AuditLogger) LogActivity(ctx context.Context, event models.ActivityEvent) error {
+	if event.Details == nil {
+		event.Details = make(map[string]any)
+	}
+	if event.Error != "" {
+		event.Details["error"] = event.Error
+	}
+	metadataJSON, _ := json.Marshal(event.Details)
+
+	_, err := audit.db.ExecContext(ctx, `
+		INSERT INTO audit_events
+			(ip_address, metadata, event_type, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`, event.IPAddress, metadataJSON, event.EventType)
+	if err != nil {
+		slog.Error("audit.activity.insert_failed", "event_type", event.EventType, "user_id", event.UserID, "error", err)
+		return err
+	}
+
+	data, _ := json.Marshal(event)
+	slog.Debug(fmt.Sprintf("[AUDIT]: %s", string(data)))
+	return nil
+}
+
+
 // 	event := AuditEvent{
 // 		Timestamp:     time.Now(),
 // 		EventType:     operation,

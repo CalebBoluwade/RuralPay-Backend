@@ -33,6 +33,7 @@ type UserService struct {
 	useEncryptedPassword bool
 	notificationSvc      *NotificationService
 	hsm                  hsm.HSMInterface
+	audit                *hsm.AuditLogger
 }
 
 func NewUserService(db *sql.DB, redisClient *redis.Client, hsmInstance hsm.HSMInterface, notificationService *NotificationService) *UserService {
@@ -40,6 +41,7 @@ func NewUserService(db *sql.DB, redisClient *redis.Client, hsmInstance hsm.HSMIn
 		db:                   db,
 		redis:                redisClient,
 		hsm:                  hsmInstance,
+		audit:                hsm.NewAuditLogger(db, hsmInstance),
 		validator:            validator.New(),
 		useEncryptedPassword: viper.GetBool("auth.use_encrypted_password"),
 		notificationSvc:      notificationService,
@@ -253,6 +255,12 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 			slog.Error("auth.login.db_error", "error", err)
 			utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
 		}
+		go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+			EventType: "LOGIN_FAILED",
+			IPAddress: utils.RealIP(r),
+			Details:   map[string]any{"identifier": req.Identifier},
+			Error:     "user not found or db error",
+		})
 		return
 	}
 
@@ -271,6 +279,12 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	if !verifyPassword(password, hashedPassword) {
 		slog.Warn("auth.login.invalid_password")
+		go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+			EventType: "LOGIN_FAILED",
+			UserID:    fmt.Sprintf("%d", user.ID),
+			IPAddress: utils.RealIP(r),
+			Error:     "invalid password",
+		})
 		utils.SendErrorResponse(w, utils.InvalidCreds, http.StatusUnauthorized, nil)
 		return
 	}
@@ -350,6 +364,13 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("auth.login.success", "user_id", user.ID)
+
+	go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+		EventType: "LOGIN_SUCCESS",
+		UserID:    fmt.Sprintf("%d", user.ID),
+		IPAddress: utils.RealIP(r),
+		Details:   map[string]any{"device": deviceID},
+	})
 
 	if s.notificationSvc != nil {
 		go s.notificationSvc.SendLoginEmail(&user, deviceID)

@@ -62,7 +62,7 @@ type NESingleRequest struct {
 }
 
 type NESingleResponse struct {
-	XMLName                    xml.Name `xml:"return" json:"-"`
+	XMLName                    xml.Name `xml:"NESingleResponse" json:"-"`
 	SessionID                  string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
@@ -91,7 +91,7 @@ type MandateAdviceRequest struct {
 }
 
 type MandateAdviceResponse struct {
-	XMLName                           xml.Name `xml:"return" json:"-"`
+	XMLName                           xml.Name `xml:"MandateAdviceResponse" json:"-"`
 	SessionID                         string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode        string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                       string   `xml:"ChannelCode" json:"channelCode"`
@@ -120,7 +120,7 @@ type BalanceEnquiryRequest struct {
 }
 
 type BalanceEnquiryResponse struct {
-	XMLName                      xml.Name `xml:"return" json:"-"`
+	XMLName                      xml.Name `xml:"BalanceEnquiryResponse" json:"-"`
 	SessionID                    string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode   string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                  string   `xml:"ChannelCode" json:"channelCode"`
@@ -154,7 +154,7 @@ type FTSingleDebitRequest struct {
 }
 
 type FTSingleDebitResponse struct {
-	XMLName                    xml.Name `xml:"return" json:"-"`
+	XMLName                    xml.Name `xml:"FTSingleDebitResponse" json:"-"`
 	SessionID                  string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
@@ -188,7 +188,7 @@ type FTSingleCreditRequest struct {
 }
 
 type FTSingleCreditResponse struct {
-	XMLName                    xml.Name `xml:"return" json:"-"`
+	XMLName                    xml.Name `xml:"FTSingleCreditResponse" json:"-"`
 	SessionID                  string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
@@ -211,7 +211,7 @@ type TSQuerySingleRequest struct {
 }
 
 type TSQuerySingleResponse struct {
-	XMLName                    xml.Name `xml:"return" json:"-"`
+	XMLName                    xml.Name `xml:"TSQuerySingleResponse" json:"-"`
 	SessionID                  string   `xml:"SessionID" json:"sessionId"`
 	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
