@@ -22,9 +22,13 @@ WORKDIR /app
 COPY --from=builder /app/server .
 COPY --from=builder /app/static ./static
 COPY --from=builder /app/api ./api
+COPY entrypoint.sh .
+
+RUN chmod +x entrypoint.sh
 
 EXPOSE 8080
 
 USER nobody
+ENV HOME=/tmp
 
-ENTRYPOINT ["./server"]
+ENTRYPOINT ["./entrypoint.sh"]
