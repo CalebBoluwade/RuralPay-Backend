@@ -144,15 +144,14 @@ jobs:
             if ! command -v docker &> /dev/null; then
               curl -fsSL https://get.docker.com | sh
               sudo usermod -aG docker $USER
-              newgrp docker
             fi
 
-            docker load < ~/ruralpay-backend.tar.gz
+            sudo docker load < ~/ruralpay-backend.tar.gz
 
-            docker stop ruralpay-backend || true
-            docker rm ruralpay-backend || true
+            sudo docker stop ruralpay-backend || true
+            sudo docker rm ruralpay-backend || true
 
-            docker run -d \
+            sudo docker run -d \
               --name ruralpay-backend \
               --restart unless-stopped \
               -p 8080:8080 \
@@ -161,5 +160,5 @@ jobs:
               -v /home/${{ secrets.EC2_USER }}/logs:/app/logs \
               ruralpay-backend:${{ github.sha }}
 
-            docker image prune -f
+            sudo docker image prune -f
             rm ~/ruralpay-backend.tar.gz
