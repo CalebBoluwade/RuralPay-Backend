@@ -156,7 +156,7 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 		}, err
 	}
 
-	sessionId := utils.GenerateNipSessionId(p.NIPService.GetNIPBankCode())
+	sessionId := utils.GenerateNIPSessionId(p.NIPService.GetNIPBankCode())
 
 	fundsTransferResult, err := p.NIBSSClient.FundsTransfer.DoTransaction(ctx, sessionId, req)
 
@@ -223,8 +223,8 @@ func (p *BankTransferPaymentProvider) calculateFee(amount int64) int64 {
 // 	slog.Info("bank_transfer.settlement.start", "tx_id", req.TransactionID)
 // 	modelTx := &models.TransactionRecord{
 // 		TransactionID: req.TransactionID,
-// 		FromAccountID: req.FromAccount,
-// 		ToAccountID:   req.BeneficiaryAccountNumber,
+// 		OriginatorAccount: req.FromAccount,
+// 		BeneficiaryAccount:   req.BeneficiaryAccountNumber,
 // 		Type:          string(req.TxType),
 // 		Amount:        req.Amount,
 // 		Currency:      req.Currency,

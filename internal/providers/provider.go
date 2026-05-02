@@ -108,13 +108,13 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 		go func() {
 			// Sender
 			err := base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
-				TransactionID: req.TransactionID,
-				FromAccountID: req.FromAccount,
-				ToAccountID:   req.BeneficiaryAccountNumber,
-				Amount:        req.Amount,
-				Currency:      req.Currency,
-				Status:        response.Status,
-				CreatedAt:     time.Now(),
+				TransactionID:      req.TransactionID,
+				OriginatorAccount:  req.FromAccount,
+				BeneficiaryAccount: req.BeneficiaryAccountNumber,
+				Amount:             req.Amount,
+				Currency:           req.Currency,
+				Status:             response.Status,
+				CreatedAt:          time.Now(),
 				Metadata: map[string]any{
 					"beneficiaryName":     req.BeneficiaryAccountName,
 					"paymentMode":         req.PaymentMode,
@@ -127,14 +127,12 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 			}
 		}()
 
-		event := models.AuditEvent{
+		if err = base.Audit.LogFailedTransaction(ctx, models.AuditEvent{
 			Timestamp: time.Now(),
 			EventType: "FAILED_TRANSACTION",
 			TxRequest: &req,
 			Error:     err.Error(),
-		}
-
-		if err = base.Audit.LogFailedTransaction(ctx, event); err != nil {
+		}); err != nil {
 			slog.Error("Failed To Log Failed Transaction", "err", err)
 		}
 
@@ -149,13 +147,13 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	go func() {
 		// Sender
 		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
-			TransactionID: req.TransactionID,
-			FromAccountID: req.FromAccount,
-			ToAccountID:   req.BeneficiaryAccountNumber,
-			Amount:        req.Amount,
-			Currency:      req.Currency,
-			Status:        response.Status,
-			CreatedAt:     time.Now(),
+			TransactionID:      req.TransactionID,
+			OriginatorAccount:  req.FromAccount,
+			BeneficiaryAccount: req.BeneficiaryAccountNumber,
+			Amount:             req.Amount,
+			Currency:           req.Currency,
+			Status:             response.Status,
+			CreatedAt:          time.Now(),
 			Metadata: map[string]any{
 				"beneficiaryName":     req.BeneficiaryAccountName,
 				"paymentMode":         req.PaymentMode,
@@ -166,13 +164,13 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 
 		// Receiver (If A Rural Pay User)
 		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
-			TransactionID: req.TransactionID,
-			FromAccountID: req.FromAccount,
-			ToAccountID:   req.BeneficiaryAccountNumber,
-			Amount:        req.Amount,
-			Currency:      req.Currency,
-			Status:        response.Status,
-			CreatedAt:     time.Now(),
+			TransactionID:      req.TransactionID,
+			OriginatorAccount:  req.FromAccount,
+			BeneficiaryAccount: req.BeneficiaryAccountNumber,
+			Amount:             req.Amount,
+			Currency:           req.Currency,
+			Status:             response.Status,
+			CreatedAt:          time.Now(),
 			Metadata: map[string]any{
 				"oldBalance":          0.00,
 				"newBalance":          0.00 + float64(req.Amount),

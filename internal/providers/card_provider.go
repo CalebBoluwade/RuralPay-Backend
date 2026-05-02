@@ -49,14 +49,25 @@ func (p *CardPaymentProvider) ValidatePayment(ctx context.Context, req *models.P
 		return errors.New("amount must be positive")
 	}
 
+	merchantIDStr, _ := ctx.Value("merchantID").(string)
+	merchantIdFromContext, err := strconv.Atoi(merchantIDStr)
+	if err != nil {
+		return errors.New("invalid merchant ID")
+	}
+
+	if merchantIdFromContext <= 0 {
+		return errors.New("invalid merchant ID")
+	}
+
+	if merchantIdFromContext != req.Metadata["cardPaymentRequest"].(*models.CardPaymentRequest).MerchantID {
+		return errors.New("payment merchant mismatch")
+	}
+
 	return nil
 }
 
 func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.PaymentRequest) (*models.PaymentResponse, error) {
-	slog.Info("card.process.start", "tx_id", req.TransactionID)
-
-	//merchantIDStr, _ := ctx.Value("merchantID").(string)
-	//merchantID, _ := strconv.Atoi(merchantIDStr)
+	slog.Info("Card.Processing.Start", "tx_id", req.TransactionID)
 
 	cardReq, ok := req.Metadata["cardPaymentRequest"].(*models.CardPaymentRequest)
 	if !ok {
@@ -70,17 +81,6 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 			Timestamp:     time.Now(),
 		}, errors.New("invalid Card Payment Request")
 	}
-
-	//if merchantIdFromContext != cardReq.MerchantID {
-	//	return &models.PaymentResponse{
-	//		Success:       false,
-	//		TransactionID: req.TransactionID,
-	//		Status:        models.TransactionStatusFailed,
-	//		Message:       "Payment Merchant Mismatch",
-	//		PaymentMode:   models.PaymentModeCard,
-	//		Timestamp:     time.Now(),
-	//	}, errors.New("payment merchant mismatch")
-	//}
 
 	if p.checkExpiredCard(cardReq.CardInfo.ExpiryDate) {
 		slog.Error("failed.expired.card.validation", "tx_id", req.TransactionID)

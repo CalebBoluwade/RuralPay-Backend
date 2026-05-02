@@ -146,7 +146,7 @@ func main() {
 	bankService := services.NewBankService(db)
 	accountService := services.NewAccountService(db, redisClient)
 	cardService := services.NewCardService(db, hsm)
-	iso20022Service := services.NewISO20022Service()
+	iso20022Service := services.NewISO20022Service(redisClient)
 	merchantService := services.NewMerchantService(db)
 	transactionQueryService := services.NewTransactionQueryService(db, hsm)
 	voucherService := services.NewVoucherService(db)

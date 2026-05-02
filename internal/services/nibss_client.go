@@ -17,11 +17,11 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/moov-io/iso20022/pkg/pacs_v08"
 	"github.com/moov-io/iso8583"
 	"github.com/ruralpay/backend/internal/circuitbreaker"
 	"github.com/ruralpay/backend/internal/constants"
 	"github.com/ruralpay/backend/internal/models"
+	"github.com/ruralpay/backend/internal/utils"
 	"github.com/sony/gobreaker"
 	"github.com/spf13/viper"
 )
@@ -30,10 +30,8 @@ type NIBSSClient struct {
 	mandateBaseURL string
 	iso8583BaseURL string // ISO 8583 card settlement
 	bvnBaseURL     string
-	pacsURL        string // ISO 20022 pacs (pacs.008, pacs.002, pacs.028)
-	acmtURL        string // ISO 20022 acmt (acmt.023, acmt.024)
-	painURL        string // ISO 20022 pain
-	apiKey         string
+
+	apiKey string
 
 	componentKey1 []byte
 	componentKey2 []byte
@@ -41,17 +39,16 @@ type NIBSSClient struct {
 	iso8583Service *ISO8583Service
 	NameEnquiry    NameEnquiryService
 	FundsTransfer  FundsTransferService
+	BalanceEnquiry BalanceEnquiryService
 
-	httpClient            *http.Client
-	circuitBreaker        *gobreaker.CircuitBreaker
-	iso20022Breaker       *gobreaker.CircuitBreaker // ISO 20022 (ACMT/PACS) breaker
-	bvnBreaker            *gobreaker.CircuitBreaker
-	mandateBreaker        *gobreaker.CircuitBreaker
-	defaultTimeout        time.Duration
-	bvnTimeout            time.Duration
-	mandateTimeout        time.Duration
-	pacsTimeout           time.Duration
-	acmtTimeout           time.Duration
+	httpClient     *http.Client
+	circuitBreaker *gobreaker.CircuitBreaker
+	bvnBreaker     *gobreaker.CircuitBreaker
+	mandateBreaker *gobreaker.CircuitBreaker
+	defaultTimeout time.Duration
+	bvnTimeout     time.Duration
+	mandateTimeout time.Duration
+
 	cardSettlementTimeout time.Duration
 }
 
@@ -65,20 +62,6 @@ func fallback(primary, fallbackURL string) string {
 func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
 	nibssBase := viper.GetString("nibss.base_url")
 
-	// Load timeout configurations with sensible defaults (in seconds)
-	getTimeout := func(key string, defaultSecs int) time.Duration {
-		val := viper.GetDuration(key)
-		if val == 0 {
-			val = time.Duration(viper.GetInt(key)) * time.Second
-		}
-		if val == 0 {
-			val = time.Duration(defaultSecs) * time.Second
-		}
-		return val
-	}
-
-	iso20022BaseURL := viper.GetString("nibss.iso20022.base.url")
-
 	componentKey1Hex := viper.GetString("nibss.iso8583.component_key_1")
 	componentKey1, err := hex.DecodeString(componentKey1Hex)
 	if err != nil {
@@ -91,14 +74,17 @@ func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
 		slog.Error("failed to decode nibss.iso8583.component_key_2", "error", err)
 	}
 
+	if !viper.IsSet("useNIBSSISOzNIPSwitch") {
+		slog.Warn("useNIBSSISOzNIPSwitch Configuration Not Set, Defaulting to ISO2022")
+	}
+
+	useNIBSSISOzNIPSwitch := viper.GetBool("useNIBSSISOzNIPSwitch")
+
 	return &NIBSSClient{
 		mandateBaseURL: fallback(viper.GetString("nibss.mandate_url"), nibssBase),
 		bvnBaseURL:     fallback(viper.GetString("nibss.bvn_url"), nibssBase),
 
 		iso8583BaseURL: fallback(viper.GetString("nibss.iso8583.base_url"), nibssBase),
-		pacsURL:        fallback(iso20022BaseURL+"/nps/pacs", nibssBase),
-		acmtURL:        fallback(iso20022BaseURL+"/nps/acmt", nibssBase),
-		painURL:        fallback(iso20022BaseURL+"/nps/pain", nibssBase),
 
 		componentKey1: componentKey1,
 		componentKey2: componentKey2,
@@ -106,22 +92,22 @@ func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
 		apiKey: viper.GetString("nibss.api_key"),
 
 		// iso8583Service: NewISO8583Service(),
-		FundsTransfer: NewFundsTransferService(redis),
-		NameEnquiry:   NewNameEnquiryService(redis),
+		FundsTransfer:  NewFundsTransferService(useNIBSSISOzNIPSwitch, redis),
+		NameEnquiry:    NewNameEnquiryService(useNIBSSISOzNIPSwitch, redis),
+		BalanceEnquiry: NewBalanceEnquiryService(useNIBSSISOzNIPSwitch, redis),
 
 		httpClient: &http.Client{
-			Timeout: getTimeout("nibss.http_timeout", 30),
+			Timeout: utils.GetTimeout("nibss.http_timeout", 30),
 		},
-		circuitBreaker:        circuitbreaker.Get("NIBSS-Settlement", circuitbreaker.NIBSSSettlementSettings()),
-		iso20022Breaker:       circuitbreaker.Get("NIBSS-ISO20022", circuitbreaker.NIBSSISO20022Settings()),
-		bvnBreaker:            circuitbreaker.Get("NIBSS-BVN", circuitbreaker.NIBSSBVNSettings()),
-		mandateBreaker:        circuitbreaker.Get("NIBSS-Mandate", circuitbreaker.NIBSSMandateSettings()),
-		defaultTimeout:        getTimeout("nibss.http_timeout", 30),
-		bvnTimeout:            getTimeout("nibss.bvn_timeout", 15),
-		mandateTimeout:        getTimeout("nibss.mandate_timeout", 10),
-		pacsTimeout:           getTimeout("nibss.pacs_timeout", 45),
-		acmtTimeout:           getTimeout("nibss.acmt_timeout", 20),
-		cardSettlementTimeout: getTimeout("nibss.card_settlement_timeout", 30),
+		circuitBreaker: circuitbreaker.Get("NIBSS-Settlement", circuitbreaker.NIBSSSettlementSettings()),
+
+		bvnBreaker:     circuitbreaker.Get("NIBSS-BVN", circuitbreaker.NIBSSBVNSettings()),
+		mandateBreaker: circuitbreaker.Get("NIBSS-Mandate", circuitbreaker.NIBSSMandateSettings()),
+		defaultTimeout: utils.GetTimeout("nibss.http_timeout", 30),
+		bvnTimeout:     utils.GetTimeout("nibss.bvn_timeout", 15),
+		mandateTimeout: utils.GetTimeout("nibss.mandate_timeout", 10),
+
+		cardSettlementTimeout: utils.GetTimeout("nibss.card_settlement_timeout", 30),
 	}
 }
 
@@ -214,82 +200,6 @@ func (c *NIBSSClient) GetAccountMandate(ctx context.Context, bankCode, accountNu
 		return nil, err
 	}
 	return result.(*models.MandateResponse), nil
-}
-
-func (c *NIBSSClient) ProcessFundsTransferSettlement(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
-	// Create a child context with PACS timeout
-	opCtx, cancel := context.WithTimeout(ctx, c.pacsTimeout)
-	defer cancel()
-
-	body, err := c.iso20022Breaker.Execute(func() (any, error) {
-		req, err := http.NewRequestWithContext(opCtx, "POST", c.pacsURL, bytes.NewBuffer(xmlData))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set(constants.ContentType, constants.XMLContentType)
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to execute request: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
-		}
-
-		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
-		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
-			return nil, fmt.Errorf("failed to decode pacs.002 response: %w", err)
-		}
-		return &pacs002, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
-}
-
-func (c *NIBSSClient) RequestPaymentStatus(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
-	// Create a child context with PACS timeout
-	opCtx, cancel := context.WithTimeout(ctx, c.pacsTimeout)
-	defer cancel()
-
-	body, err := c.iso20022Breaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(opCtx, "POST", c.pacsURL, bytes.NewBuffer(xmlData))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create pacs.028 request: %w", err)
-		}
-		req.Header.Set(constants.ContentType, constants.XMLContentType)
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("pacs.028 request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
-		}
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
-		}
-
-		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
-		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
-			return nil, fmt.Errorf("failed to decode pacs.002 status response: %w", err)
-		}
-		return &pacs002, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
 }
 
 func (c *NIBSSClient) SendAndReceive(conn net.Conn, packed_ []byte) ([]byte, error) {

@@ -128,8 +128,8 @@ svc := services.NewISO20022Service()
 
 tx := &models.TransactionRecord{
     TransactionID: "TXN123456789",
-    FromAccountID: "0123456789",
-    ToAccountID:   "9876543210",
+    OriginatorAccount: "0123456789",
+    BeneficiaryAccount:   "9876543210",
     ToBankCode:    "000013",
     Amount:        25075, // kobo (250.75 NGN)
     Currency:      "NGN",

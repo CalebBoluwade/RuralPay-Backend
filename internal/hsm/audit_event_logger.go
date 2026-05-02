@@ -29,7 +29,7 @@ func (audit *AuditLogger) LogTransaction(ctx context.Context, tx *sql.Tx, event 
 	slog.Info("audit.process.inserting", "tx_id", event.TxRequest.TransactionID)
 
 	// Generate HSM Signature For The Audit Transaction Event
-	timestamp := time.Now()
+	timestamp := time.Now().UTC()
 	nonce := uuid.New().String()
 
 	hsmTx := &Transaction{
@@ -124,7 +124,7 @@ func (audit *AuditLogger) LogTransaction(ctx context.Context, tx *sql.Tx, event 
 func (audit *AuditLogger) LogFailedTransaction(ctx context.Context, event models.AuditEvent) error {
 	slog.Info("audit.process.failed_transaction", "tx_id", event.TxRequest.TransactionID)
 
-	timestamp := time.Now()
+	timestamp := time.Now().UTC()
 	nonce := uuid.New().String()
 
 	hsmTx := &Transaction{
@@ -199,19 +199,18 @@ func (audit *AuditLogger) LogActivity(ctx context.Context, event models.Activity
 	return nil
 }
 
-
 // 	event := AuditEvent{
-// 		Timestamp:     time.Now(),
+// 		Timestamp:     time.Now().UTC(),
 // 		EventType:     operation,
 // 		TransactionID: transactionId,
-// 		FromAccountID: accountID,
+// 		OriginatorAccount: accountID,
 // 		Status:        "SUCCESS",
 // 		Details:       map[string]any{"details": details},
 // 	}
 // 	a.log(event)
 // }
 
-func (a *AuditLogger) log(event models.AuditEvent) {
+func (audit *AuditLogger) log(event models.AuditEvent) {
 	data, _ := json.Marshal(event)
 	slog.Debug(fmt.Sprintf("[AUDIT]: %s", string(data)))
 }

@@ -10,34 +10,38 @@ import (
 	"github.com/ruralpay/backend/internal/models"
 )
 
-type FundsTransferImpl struct {
-	Redis *redis.Client
-
-	ISO20022Service *ISO20022Service
-	NIPService      *NIBSSNIPService
-}
-
-type FundsTransferResult struct {
-	SessionID string
-	Reference string
-	Status    string
+type NIPFundsTransferImpl struct {
+	Redis      *redis.Client
+	NIPService *NIBSSNIPService
 }
 
 // FundsTransferService abstracts fund transfer operations.
 // Callers never know or care whether NIP or ISO 20022 is used underneath.
 type FundsTransferService interface {
-	DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*FundsTransferResult, error)
+	DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*models.FundsTransferResult, error)
 }
 
-func NewFundsTransferService(redis *redis.Client) FundsTransferService {
+func NewFundsTransferService(useNIBSSISOzNIPSwitch bool, redis *redis.Client) FundsTransferService {
 	// Return the default implementation (NIP or ISO 20022)
-	return &FundsTransferImpl{
-		Redis:      redis,
-		NIPService: NewNIBSSNIPService(),
+	switch useNIBSSISOzNIPSwitch {
+	case true:
+		return newNIBSSISO20022FundsTransferImpl(redis)
+	case false:
+		return newNIPFundsTransferImpl(redis)
+	default:
+		return newNIBSSISO20022FundsTransferImpl(redis)
 	}
 }
 
-func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*FundsTransferResult, error) {
+func newNIBSSISO20022FundsTransferImpl(redis *redis.Client) FundsTransferService {
+	return &ISO20022FundsTransferImpl{Redis: redis, ISO20022Service: NewISO20022Service(redis)}
+}
+
+func newNIPFundsTransferImpl(redis *redis.Client) FundsTransferService {
+	return &NIPFundsTransferImpl{Redis: redis, NIPService: NewNIBSSNIPService()}
+}
+
+func (s *NIPFundsTransferImpl) DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*models.FundsTransferResult, error) {
 	// Implementation for NIP fund transfer
 
 	user := models.UserTransactionMetaData{
@@ -56,7 +60,7 @@ func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string,
 
 	if s.Redis != nil {
 		// Fetch Name Enquiry Details For The Transaction
-		err := s.Redis.HGetAll(ctx, fmt.Sprintf(constants.UserTransactionMetadataKeyPrefix, req.TransactionID)).Scan(&user)
+		err := s.Redis.HGetAll(ctx, fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, req.TransactionID)).Scan(&user)
 		if err != nil {
 			slog.Error("funds_transfer.redis_user_metadata_failed", "account", req.FromAccount, "error", err)
 			return nil, fmt.Errorf("failed to fetch user metadata from Redis: %w", err)
@@ -121,46 +125,61 @@ func (s *FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string,
 			return nil, fmt.Errorf("credit failed with response code: %s", credit.ResponseCode)
 		}
 
-		return &FundsTransferResult{
+		return &models.FundsTransferResult{
 			SessionID: sessionId,
 			Reference: debit.SessionID,
 			Status:    "SUCCESS",
 		}, nil
 	}
 
-	return &FundsTransferResult{
+	return &models.FundsTransferResult{
 		SessionID: sessionId,
 		Reference: debit.SessionID,
 		Status:    "FAILED",
 	}, fmt.Errorf("funds transfer failed with response code: %s", debit.ResponseCode)
 }
 
-// func TransferFundsISO20022(ctx context.Context, fromAccount, toAccount, bankCode string, amount float64) (*FundsTransferResult, error) {
-// 	// Implementation for ISO 20022 fund transfer
+type ISO20022FundsTransferImpl struct {
+	Redis           *redis.Client
+	ISO20022Service *ISO20022Service
+}
 
-// 	doc, err := p.iso20022Service.ConvertTransaction(modelTx)
-// 	if err != nil {
-// 		slog.Error("bank_transfer.settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
-// 		if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionStatusISOCONVFailed, req.TransactionID); dbErr != nil {
-// 			slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-// 		}
-// 		return err, true
-// 	}
+func (ISOFundTransfer *ISO20022FundsTransferImpl) DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*models.FundsTransferResult, error) {
+	// Implementation for ISO 20022 Fund transfer
+	modelTx := &models.TransactionRecord{
+		TransactionID:      req.TransactionID,
+		BeneficiaryAccount: req.BeneficiaryAccountNumber,
+		OriginatorAccount:  req.FromAccount,
+		Amount:             req.Amount,
+		Narration:          req.Narration,
+		Metadata:           req.Metadata,
+	}
 
-// 	slog.Info("bank_transfer.settlement.sending", "tx_id", req.TransactionID)
-// 	resp, err := p.iso20022Service.SendToSettlement(ctx, doc)
-// 	if err != nil {
-// 		slog.Error("bank_transfer.settlement.failed", "tx_id", req.TransactionID, "error", err)
-// 		shouldReverse := p.shouldReverseOnSettlementFailure(resp)
-// 		if shouldReverse {
-// 			if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionSettlementFailed, req.TransactionID); dbErr != nil {
-// 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-// 			}
-// 		} else {
-// 			if _, dbErr := p.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
-// 				slog.Error("bank_transfer.settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
-// 			}
-// 		}
-// 		return err, shouldReverse
-// 	}
-// }
+	doc, err := ISOFundTransfer.ISO20022Service.CreatePacs008(modelTx)
+	if err != nil {
+		slog.Error("Fund.Transfer.Settlement.iso_conversion_failed", "tx_id", req.TransactionID, "error", err)
+		//if _, dbErr := ISOFundTransfer.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionStatusISOCONVFailed, req.TransactionID); dbErr != nil {
+		//	slog.Error("Fund.Transfer.Settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+		//}
+		return nil, fmt.Errorf("ISO 20020 funds transfer Conversion failed with transaction_id: %s", req.TransactionID)
+	}
+
+	slog.Info("Fund.Transfer.Settlement.sending", "tx_id", req.TransactionID)
+	resp, err := ISOFundTransfer.ISO20022Service.SendToSettlement(ctx, doc)
+	if err != nil {
+		slog.Error("Fund.Transfer.Settlement.failed", "tx_id", req.TransactionID, "error", err)
+		//shouldReverse := ISOFundTransfer.shouldReverseOnSettlementFailure(resp)
+		//if shouldReverse {
+		//	if _, dbErr := ISOFundTransfer.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, models.TransactionSettlementFailed, req.TransactionID); dbErr != nil {
+		//		slog.Error("Fund.Transfer.Settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+		//	}
+		//} else {
+		//	if _, dbErr := ISOFundTransfer.DB.ExecContext(ctx, `UPDATE transactions SET status = $1, updated_at = NOW() WHERE transaction_id = $2`, "PENDING_RETRY", req.TransactionID); dbErr != nil {
+		//		slog.Error("Fund.Transfer.Settlement.status_update_failed", "tx_id", req.TransactionID, "error", dbErr)
+		//	}
+		//}
+		return nil, err
+	}
+
+	return &resp, nil
+}

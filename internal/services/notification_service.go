@@ -374,7 +374,7 @@ func (ns *NotificationService) buildPaymentPayload(userId int, transaction *mode
 	switch notifType {
 	case models.PaymentReceived:
 		title = "Payment Received"
-		body = fmt.Sprintf("You Received %s %.2f From %s", transaction.Currency, float64(transaction.Amount), transaction.FromAccountID)
+		body = fmt.Sprintf("You Received %s %.2f From %s", transaction.Currency, float64(transaction.Amount), transaction.OriginatorAccount)
 	case models.PaymentSent:
 		title = "Payment Sent"
 		body = fmt.Sprintf("There Was a Debit Transaction On Your Account of %s %.2f", transaction.Currency, float64(transaction.Amount))
@@ -414,7 +414,7 @@ func (ns *NotificationService) buildPaymentPayload(userId int, transaction *mode
 			"senderFirstName":     user.FirstName,
 			"beneficiaryName":     fmt.Sprintf("%v", transaction.Metadata["beneficiaryName"]),
 			"beneficiaryBankName": fmt.Sprintf("%v", transaction.Metadata["beneficiaryBankName"]),
-			"beneficiaryAcct":     transaction.ToAccountID,
+			"beneficiaryAcct":     transaction.BeneficiaryAccount,
 			"fee":                 fmt.Sprintf("%.2f", float64(transaction.Fee)),
 			"reference":           fmt.Sprintf("%v", transaction.Metadata["reference"]),
 			"date":                transaction.CreatedAt.Format("02 Jan 2006, 03:04 PM"),

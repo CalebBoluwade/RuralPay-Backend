@@ -73,6 +73,8 @@ func init() {
 	_ = viper.BindEnv("nibss.api_key", "NIBSS_API_KEY")
 	_ = viper.BindEnv("nibss.bvn_url", "NIBSS_BVN_URL")
 
+	_ = viper.BindEnv("UseNIBSSISOzNIPSwitch", "UseNIBSSISOzNIPSwitch")
+
 	// NIBSS NIP (SOAP) configuration
 	_ = viper.BindEnv("nip.bank_code", "NIP_BANK_CODE")
 	_ = viper.BindEnv("nip.payment_prefix", "NIP_PAYMENT_PREFIX")

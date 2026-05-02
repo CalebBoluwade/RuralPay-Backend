@@ -66,6 +66,13 @@ type PaymentRequest struct {
 	IPAddress                string      `json:"IPAddress,omitempty"`
 }
 
+type FundsTransferResult struct {
+	SessionID    string
+	Reference    string
+	Status       string
+	RejectReason string
+}
+
 type PaymentResponse struct {
 	Success       bool                  `json:"success"`
 	TransactionID string                `json:"transactionId"`
@@ -103,28 +110,29 @@ type AirtimeDataRequest struct {
 
 // TransactionRecord represents a payment transaction
 type TransactionRecord struct {
-	ID            int               `json:"id" db:"id"`
-	TransactionID string            `json:"transactionId" db:"transaction_id"`
-	Reference     string            `json:"reference" db:"reference"`
-	FromAccountID string            `json:"from_account_id" db:"from_account_id"`
-	ToAccountID   string            `json:"to_account_id" db:"to_account_id"`
-	Amount        int64             `json:"amount" db:"amount"`
-	Fee           int64             `json:"fee" db:"fee"`
-	TotalAmount   int64             `json:"total_amount" db:"total_amount"`
-	Currency      string            `json:"currency" db:"currency"`
-	Status        TransactionStatus `json:"status" db:"status"`
-	Type          string            `json:"type" db:"type"`
-	Signature     string            `json:"signature" db:"signature"`
-	DeviceID      string            `json:"device_id" db:"device_id"`
-	Location      Location          `json:"location" db:"location"`
-	SyncStatus    string            `json:"sync_status" db:"sync_status"`
-	ErrorMessage  string            `json:"error_message" db:"error_message"`
-	Metadata      Metadata          `json:"metadata" db:"metadata"`
-	ToBankCode    string            `json:"to_bank_code,omitempty"`
-	CreatedAt     time.Time         `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at" db:" updated_at"`
-	SettledAt     *time.Time        `json:"settled_at" db:"settled_at"`
-	ProcessedAt   *time.Time        `json:"processed_at" db:"processed_at"`
+	ID                 int               `json:"id" db:"id"`
+	TransactionID      string            `json:"transactionId" db:"transaction_id"`
+	Reference          string            `json:"reference" db:"reference"`
+	OriginatorAccount  string            `json:"originator_account" db:"originator_account"`
+	BeneficiaryAccount string            `json:"beneficiary_account" db:"beneficiary_account"`
+	Amount             int64             `json:"amount" db:"amount"`
+	Fee                int64             `json:"fee" db:"fee"`
+	TotalAmount        int64             `json:"total_amount" db:"total_amount"`
+	Currency           string            `json:"currency" db:"currency"`
+	Status             TransactionStatus `json:"status" db:"status"`
+	Narration          string            `json:"narration" db:"narration"`
+	Type               string            `json:"type" db:"type"`
+	Signature          string            `json:"signature" db:"signature"`
+	DeviceID           string            `json:"device_id" db:"device_id"`
+	Location           Location          `json:"location" db:"location"`
+	SyncStatus         string            `json:"sync_status" db:"sync_status"`
+	ErrorMessage       string            `json:"error_message" db:"error_message"`
+	Metadata           Metadata          `json:"metadata" db:"metadata"`
+	ToBankCode         string            `json:"to_bank_code,omitempty"`
+	CreatedAt          time.Time         `json:"created_at" db:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at" db:" updated_at"`
+	SettledAt          *time.Time        `json:"settled_at" db:"settled_at"`
+	ProcessedAt        *time.Time        `json:"processed_at" db:"processed_at"`
 }
 
 type AuditEvent struct {

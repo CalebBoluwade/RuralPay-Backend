@@ -81,7 +81,7 @@ func TestExecuteNameEnquiry_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.NESingleRequest{
-		SessionID:                  utils.GenerateNipSessionId("999999"),
+		SessionID:                  utils.GenerateNIPSessionId("999999"),
 		DestinationInstitutionCode: "999100",
 		ChannelCode:                "1",
 		AccountNumber:              "0035428391",
@@ -154,7 +154,7 @@ func TestExecuteMandateAdvice_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.MandateAdviceRequest{
-		SessionID:              utils.GenerateNipSessionId("999999"),
+		SessionID:              utils.GenerateNIPSessionId("999999"),
 		MandateReferenceNumber: utils.GenerateMandateRef("NPP"),
 		ChannelCode:            "1",
 	}
@@ -212,7 +212,7 @@ func TestExecuteBalanceEnquiry_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.BalanceEnquiryRequest{
-		SessionID:           utils.GenerateNipSessionId("999999"),
+		SessionID:           utils.GenerateNIPSessionId("999999"),
 		TargetAccountNumber: "0035428391",
 		ChannelCode:         "1",
 	}
@@ -257,7 +257,7 @@ func TestExecuteBalanceEnquiry_HttpError(t *testing.T) {
 // --- Helpers ---
 
 func TestGenerateNipSessionId(t *testing.T) {
-	id := utils.GenerateNipSessionId("999999")
+	id := utils.GenerateNIPSessionId("999999")
 	assert.Len(t, id, 30) // 6 (bankCode) + 12 (timestamp) + 12 (random)
 	assert.True(t, len(id) == 30)
 }
@@ -311,7 +311,7 @@ func TestExecuteFundsTransferDebit_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.FTSingleDebitRequest{
-		SessionID:                  utils.GenerateNipSessionId("999999"),
+		SessionID:                  utils.GenerateNIPSessionId("999999"),
 		DestinationInstitutionCode: "999100",
 		ChannelCode:                "1",
 		Amount:                     "50000",
@@ -357,7 +357,7 @@ func TestExecuteFundsTransferCredit_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.FTSingleCreditRequest{
-		SessionID:                  utils.GenerateNipSessionId("999999"),
+		SessionID:                  utils.GenerateNIPSessionId("999999"),
 		DestinationInstitutionCode: "999100",
 		ChannelCode:                "1",
 		Amount:                     "75000",
@@ -403,7 +403,7 @@ func TestExecuteTransactionStatusQuery_Success(t *testing.T) {
 
 	svc := newTestNipService(srv.URL)
 	req := &models.TSQuerySingleRequest{
-		SessionID:                  utils.GenerateNipSessionId("999999"),
+		SessionID:                  utils.GenerateNIPSessionId("999999"),
 		DestinationInstitutionCode: "999100",
 		ChannelCode:                "1",
 		OriginalSessionID:          "sess001",

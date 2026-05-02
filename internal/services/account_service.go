@@ -107,10 +107,10 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 			WHERE user_id = $1 AND $2 = true
 			RETURNING 1
 		)
-		INSERT INTO accounts (account_name, account_id, bank_name, bank_code, user_id, is_primary, balance, version, updated_at)
-		VALUES ($3, $4, $5, $6, $1, $2, 0, 1, NOW())
+		INSERT INTO accounts (account_name, account_id, bank_name, bank_code, mandate_code, user_id, is_primary, balance, version, updated_at)
+		VALUES ($3, $4, $5, $6, $7, $1, $2, 0, 1, NOW())
 		RETURNING id`,
-		userID, req.IsPrimary, mandateResp.AccountName, req.AccountNumber, mandateResp.BankName, req.BankCode,
+		userID, req.IsPrimary, mandateResp.AccountName, req.AccountNumber, mandateResp.BankName, req.BankCode, mandateResp,
 	).Scan(&accountID)
 	if err != nil {
 		slog.Error("Account.Link_Account.Insert_Failed", "error", err)
@@ -256,7 +256,7 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Info("Account.Name_Enquiry.External_Found", "account_id", sanitizeAcct(accountId))
+	slog.Info("Account.Name_Enquiry.External_Found", "account_response", neResult, "account_id", sanitizeAcct(accountId))
 	utils.SendSuccessResponse(w, utils.AccountFound, map[string]any{
 		"accountId":   accountId,
 		"accountName": neResult.AccountName,
@@ -278,70 +278,137 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 	slog.Info("Account.Balance_Enquiry.Start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
 
-	// userID is already an int, no need to convert
+	type accountRow struct {
+		accountID   string
+		name        string
+		dbBalance   int64
+		status      string
+		isPrimary   bool
+		bankName    string
+		bankCode    string
+		bvn         string
+		mandateCode string // NE session ID saved at link time, used as AuthorizationCode
+	}
+
+	// 1. Fetch accounts + limits — no external balance join
 	rows, err := s.db.QueryContext(r.Context(), `
 		WITH user_data AS (
-			SELECT 
-				COALESCE(MAX(ul.daily_limit), 500000) as daily_limit,
-				COALESCE(MAX(ul.single_transaction_limit), 100000) as single_tx_limit,
-				COALESCE(SUM(t.amount) FILTER (WHERE t.type = 'DEBIT' AND t.status IN ('PENDING', 'SUCCESS', 'COMPLETED') AND t.created_at >= CURRENT_DATE), 0) as daily_spent
+			SELECT
+				COALESCE(MAX(ul.daily_limit), 500000) AS daily_limit,
+				COALESCE(MAX(ul.single_transaction_limit), 100000) AS single_tx_limit,
+				COALESCE(SUM(t.amount) FILTER (
+					WHERE t.type = 'DEBIT'
+					  AND t.status IN ('PENDING','SUCCESS','COMPLETED')
+					  AND t.created_at >= CURRENT_DATE
+				), 0) AS daily_spent
 			FROM (SELECT $1::integer AS uid) u
 			LEFT JOIN user_limits ul ON ul.user_id = u.uid
-			LEFT JOIN transactions t ON t.user_id = u.uid
+			LEFT JOIN transactions t  ON t.user_id  = u.uid
 			GROUP BY u.uid
 		)
-		SELECT 
-			a.id, a.account_id, a.account_name, a.balance, a.status,
-			COALESCE(a.is_primary, false) as is_primary,
-			COALESCE(a.bank_name, '') as bank_name,
-			COALESCE(a.bank_code, '') as bank_code,
+		SELECT
+			a.account_id, a.account_name, a.balance, a.status,
+			COALESCE(a.is_primary, false),
+			COALESCE(a.bank_name, ''),
+			COALESCE(a.bank_code, ''),
+			COALESCE(u.bvn, ''),
+			COALESCE(a.mandate_code, ''),
 			ud.daily_limit, ud.single_tx_limit, ud.daily_spent
 		FROM accounts a
+		JOIN users u ON u.id = $1
 		CROSS JOIN user_data ud
-		WHERE a.user_id = $1
+		WHERE a.user_id = $1 AND a.status = 'ACTIVE'
 	`, userID)
 	if err != nil {
-		slog.Error("account.balance_enquiry.query_failed", "user_id", userID, "error", err)
+		slog.Error("Account.Balance_Enquiry.Query_Failed", "user_id", userID, "error", err)
 		utils.SendErrorResponse(w, "Failed to fetch accounts", http.StatusFailedDependency, nil)
 		return
 	}
 	defer rows.Close()
 
-	accounts := []map[string]any{}
+	var accts []accountRow
 	var dailyLimit, singleTxLimit, dailySpent float64
-	rowCount := 0
 
 	for rows.Next() {
-		rowCount++
-		var id, accountName, status string
-		var accountID, bankName, bankCode sql.NullString
-		var balance int64
-		var isPrimary bool
-		if err := rows.Scan(&id, &accountID, &accountName, &balance, &status, &isPrimary, &bankName, &bankCode, &dailyLimit, &singleTxLimit, &dailySpent); err != nil {
-			slog.Error("account.balance_enquiry.scan_error", "user_id", userID, "error", err)
+		var a accountRow
+		var accountID sql.NullString
+		if err := rows.Scan(
+			&accountID, &a.name, &a.dbBalance, &a.status,
+			&a.isPrimary, &a.bankName, &a.bankCode, &a.bvn, &a.mandateCode,
+			&dailyLimit, &singleTxLimit, &dailySpent,
+		); err != nil {
+			slog.Error("Account.Balance_Enquiry.Scan_Error", "user_id", userID, "error", err)
 			continue
 		}
-		accounts = append(accounts, map[string]any{
-			"id":               id,
-			"accountId":        accountID.String,
-			"accountName":      accountName,
-			"availableBalance": balance,
-			"status":           status,
-			"isPrimary":        isPrimary,
-			"bankName":         bankName.String,
-			"bankCode":         bankCode.String,
-			"bankLogo":         s.bankService.LoadLogo(bankCode.String),
-		})
+		a.accountID = accountID.String
+		accts = append(accts, a)
 	}
-
 	if err := rows.Err(); err != nil {
-		slog.Error("account.balance_enquiry.rows_error", "user_id", userID, "error", err)
+		slog.Error("Account.Balance_Enquiry.Rows_Error", "user_id", userID, "error", err)
 	}
 
-	slog.Info("account.balance_enquiry.done", "user_id", userID, "account_count", len(accounts))
+	// 2. Fan out NIP balance enquiries in parallel for external accounts only
+	type nipResult struct {
+		accountID      string
+		balance        string
+		balanceSuccess bool
+	}
+	resultCh := make(chan nipResult, len(accts))
+	external := 0
 
+	for _, a := range accts {
+		if a.bankCode == "" || a.accountID == "" {
+			continue
+		}
+		external++
+		go func(accountID, accountName, bankCode, bvn, mandateCode string) {
+			bal, err := s.nibssClient.BalanceEnquiry.GetBalance(r.Context(), accountID, accountName, bankCode, bvn, mandateCode)
+			if err != nil {
+				slog.Warn("Account.Balance_Enquiry.NIP_Failed", "account_id", sanitizeAcct(accountID), "error", err)
+				resultCh <- nipResult{accountID: accountID, balanceSuccess: false}
+				return
+			}
+			resultCh <- nipResult{accountID: accountID, balance: bal.Balance, balanceSuccess: true}
+		}(a.accountID, a.name, a.bankCode, a.bvn, a.mandateCode)
+	}
+
+	type nipBalance struct {
+		balance  string
+		success bool
+	}
+	nipBalances := make(map[string]nipBalance, external)
+	for i := 0; i < external; i++ {
+		res := <-resultCh
+		nipBalances[res.accountID] = nipBalance{balance: res.balance, success: res.balanceSuccess}
+	}
+
+	// 3. Build response — wallet accounts use DB balance, external accounts use NIP balance
+	accounts := make([]map[string]any, 0, len(accts))
+	for _, a := range accts {
+		entry := map[string]any{
+			"accountId":   a.accountID,
+			"accountName": a.name,
+			"status":      a.status,
+			"isPrimary":   a.isPrimary,
+			"bankName":    a.bankName,
+			"bankCode":    a.bankCode,
+			"bankLogo":    s.bankService.LoadLogo(a.bankCode),
+		}
+		if a.bankCode == "" {
+			entry["availableBalance"] = a.dbBalance
+			entry["balanceAvailable"] = true
+		} else if nip, ok := nipBalances[a.accountID]; ok && nip.success {
+			entry["availableBalance"] = nip.balance
+			entry["balanceAvailable"] = true
+		} else {
+			entry["availableBalance"] = nil
+			entry["balanceAvailable"] = false
+		}
+		accounts = append(accounts, entry)
+	}
+
+	slog.Info("Account.Balance_Enquiry.Done", "user_id", userID, "total", len(accounts), "nip_fetched", external)
 	utils.SendSuccessResponse(w, "Returning User Accounts", map[string]any{
-		// "responseCode":           "00",
 		"accounts":               accounts,
 		"dailyLimit":             dailyLimit,
 		"singleTransactionLimit": singleTxLimit,

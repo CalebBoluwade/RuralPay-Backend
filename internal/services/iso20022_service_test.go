@@ -21,12 +21,12 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 
 	t.Run("successful conversion", func(t *testing.T) {
 		tx := models.TransactionRecord{
-			TransactionID: "tx123",
-			FromAccountID: "card123",
-			ToAccountID:   "merchant123",
-			Amount:        10050,
-			Currency:      "NGN",
-			Status:        "PENDING",
+			TransactionID:      "tx123",
+			OriginatorAccount:  "card123",
+			BeneficiaryAccount: "merchant123",
+			Amount:             10050,
+			Currency:           "NGN",
+			Status:             "PENDING",
 		}
 
 		body, _ := json.Marshal(tx)
@@ -76,12 +76,12 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 
 	t.Run("settlement fails when NIBSS unreachable", func(t *testing.T) {
 		tx := models.TransactionRecord{
-			TransactionID: "tx123",
-			FromAccountID: "card123",
-			ToAccountID:   "merchant123",
-			Amount:        10050,
-			Currency:      "NGN",
-			Status:        "PENDING",
+			TransactionID:      "tx123",
+			OriginatorAccount:  "card123",
+			BeneficiaryAccount: "merchant123",
+			Amount:             10050,
+			Currency:           "NGN",
+			Status:             "PENDING",
 		}
 
 		body, _ := json.Marshal(tx)
@@ -109,11 +109,11 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 
 	t.Run("create valid pacs008", func(t *testing.T) {
 		tx := &models.TransactionRecord{
-			TransactionID: "tx123",
-			FromAccountID: "card123",
-			ToAccountID:   "merchant123",
-			Amount:        10050,
-			Currency:      "NGN",
+			TransactionID:      "tx123",
+			OriginatorAccount:  "card123",
+			BeneficiaryAccount: "merchant123",
+			Amount:             10050,
+			Currency:           "NGN",
 		}
 
 		doc, err := service.CreatePacs008(tx)
@@ -301,12 +301,12 @@ func TestISO20022Service_SignXMLWithPacs008(t *testing.T) {
 
 	t.Run("sign real pacs.008 XML round-trip", func(t *testing.T) {
 		tx := &models.TransactionRecord{
-			TransactionID: "tx-sign-001",
-			FromAccountID: "acc-from",
-			ToAccountID:   "acc-to",
-			ToBankCode:    "000013",
-			Amount:        50000,
-			Currency:      "NGN",
+			TransactionID:      "tx-sign-001",
+			OriginatorAccount:  "acc-from",
+			BeneficiaryAccount: "acc-to",
+			ToBankCode:         "000013",
+			Amount:             50000,
+			Currency:           "NGN",
 		}
 		doc, err := svc.CreatePacs008(tx)
 		require.NoError(t, err)

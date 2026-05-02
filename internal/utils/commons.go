@@ -11,7 +11,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 )
+
+// GetTimeout Load Timeout Configurations with sensible defaults (in seconds)
+func GetTimeout(key string, defaultSecs int) time.Duration {
+	val := viper.GetDuration(key)
+	if val == 0 {
+		val = time.Duration(viper.GetInt(key)) * time.Second
+	}
+	if val == 0 {
+		val = time.Duration(defaultSecs) * time.Second
+	}
+	return val
+}
 
 func RealIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
@@ -85,8 +99,8 @@ func GenerateImageIdentityToken() string {
 	return string(token)
 }
 
-// GenerateNipSessionId generates a unique NIP SessionID: "{nipBankCode}{yyMMddHHmmss}{12RandomDigits}"
-func GenerateNipSessionId(nipBankCode string) string {
+// GenerateNIPSessionId Generates a Unique NIP SessionID: "{nipBankCode}{yyMMddHHmmss}{12RandomDigits}"
+func GenerateNIPSessionId(nipBankCode string) string {
 	return nipBankCode + time.Now().Format("060102150405") + generateRandomNumericString(12)
 }
 

@@ -3,7 +3,7 @@ package constants
 var SessionKeyPrefix = "SESSION:"
 var BlacklistKeyPrefix = "BLACKLIST:"
 
-var UserTransactionMetadataKeyPrefix = "userTxMetadata:%s" // userTxMetadata:transactionId
+var NameEnquiryMetadataKeyPrefix = "NameEnquiryTxMetadata:%s" // NameEnquiryTxMetadata:transactionId
 
 var MaxBytes = 1_048_576 // 1 MB
 

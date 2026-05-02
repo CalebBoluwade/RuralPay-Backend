@@ -12,17 +12,17 @@ import (
 
 func main() {
 	// Create ISO20022 service
-	iso20022Service := services.NewISO20022Service()
+	iso20022Service := services.NewISO20022Service(nil)
 
 	// Example transaction
 	tx := &models.TransactionRecord{
 		TransactionID: "TXN123456789",
 		// ReferenceID:   "REF987654321",
-		FromAccountID: "CARD001",
-		ToAccountID:   "CARD002",
-		Amount:        25075,
-		Currency:      "NGN",
-		Status:        "PENDING",
+		OriginatorAccount:  "CARD001",
+		BeneficiaryAccount: "CARD002",
+		Amount:             25075,
+		Currency:           "NGN",
+		Status:             "PENDING",
 	}
 
 	fmt.Println("=== Creating pacs.008 (FI to FI Customer Credit Transfer) ===")

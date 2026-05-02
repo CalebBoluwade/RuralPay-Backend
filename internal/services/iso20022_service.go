@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/rsa"
 	"encoding/json"
@@ -10,17 +11,27 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/moov-io/iso20022/pkg/acmt_v02"
 	"github.com/moov-io/iso20022/pkg/common"
 	"github.com/moov-io/iso20022/pkg/pacs_v04"
 	"github.com/moov-io/iso20022/pkg/pacs_v08"
+	"github.com/ruralpay/backend/internal/circuitbreaker"
+	"github.com/ruralpay/backend/internal/constants"
 	"github.com/ruralpay/backend/internal/models"
 	"github.com/ruralpay/backend/internal/utils"
+	"github.com/sony/gobreaker"
 	"github.com/spf13/viper"
 )
 
 type ISO20022Service struct {
+	ISO20022Breaker *gobreaker.CircuitBreaker // ISO 20022 (ACMT/PACS) breaker
+
+	httpClient *http.Client
+
+	pacsTimeout time.Duration
+
 	validator     *ValidationHelper
 	nibssClient   *NIBSSClient
 	senderPriv    *rsa.PrivateKey
@@ -28,9 +39,15 @@ type ISO20022Service struct {
 	recipientPriv *rsa.PrivateKey // only used in tests to simulate NIBSS decryption
 }
 
-func NewISO20022Service() *ISO20022Service {
+func NewISO20022Service(redis *redis.Client) *ISO20022Service {
+
 	svc := &ISO20022Service{
 		validator: NewValidationHelper(),
+		httpClient: &http.Client{
+			Timeout: utils.GetTimeout("nibss.http_timeout", 30),
+		},
+		pacsTimeout:     utils.GetTimeout("nibss.pacs_timeout", 45),
+		ISO20022Breaker: circuitbreaker.Get("NIBSS-ISO20022", circuitbreaker.NIBSSISO20022Settings()),
 	}
 	if privPath := viper.GetString("iso20022.signing_key_path"); privPath != "" {
 		if pem, err := os.ReadFile(privPath); err == nil {
@@ -43,6 +60,24 @@ func NewISO20022Service() *ISO20022Service {
 		}
 	}
 	return svc
+}
+
+// ISO 20022 acmt (acmt.023, acmt.024)
+func (iso *ISO20022Service) GetACMTBaseURL() string {
+	iso20022BaseURL := viper.GetString("nibss.iso20022.base.url")
+	return iso20022BaseURL + "/nps/acmt"
+}
+
+func (iso *ISO20022Service) GetPACSBaseURL() string {
+	// ISO 20022 pacs (pacs.008, pacs.002, pacs.028)
+	iso20022BaseURL := viper.GetString("nibss.iso20022.base.url")
+	return iso20022BaseURL + "/nps/pacs"
+}
+
+func (iso *ISO20022Service) GetPAINBaseURL() string {
+	// ISO 20022 pain
+	iso20022BaseURL := viper.GetString("nibss.iso20022.base.url")
+	return iso20022BaseURL + "/nps/pain"
 }
 
 // SignXML seals an XML string into a SignedMessage using AES-256-GCM + RSA.
@@ -162,46 +197,46 @@ func (iso *ISO20022Service) ConvertTransaction(tx *models.TransactionRecord) (*p
 	return iso.CreatePacs008(tx)
 }
 
-func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (models.SettlementResult, error) {
+func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_v08.FIToFICustomerCreditTransferV08) (models.FundsTransferResult, error) {
 	xmlData, err := iso.ConvertToXML(pacs008)
 	if err != nil {
-		return models.SettlementResult{}, fmt.Errorf("failed to convert pacs.008 to XML: %w", err)
+		return models.FundsTransferResult{}, fmt.Errorf("failed to convert pacs.008 to XML: %w", err)
 	}
 
 	payload := []byte(xmlData)
 	if iso.senderPriv != nil && iso.nibssPub != nil {
 		signed, err := iso.SignXML(xmlData)
 		if err != nil {
-			return models.SettlementResult{}, fmt.Errorf("failed to sign pacs.008: %w", err)
+			return models.FundsTransferResult{}, fmt.Errorf("failed to sign pacs.008: %w", err)
 		}
 		payload, err = json.Marshal(signed)
 		if err != nil {
-			return models.SettlementResult{}, fmt.Errorf("failed to marshal signed message: %w", err)
+			return models.FundsTransferResult{}, fmt.Errorf("failed to marshal signed message: %w", err)
 		}
 	}
 
 	if iso.nibssClient == nil {
-		return models.SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: NIBSS client not configured")
+		return models.FundsTransferResult{}, fmt.Errorf("failed to send pacs.008 to settlement: NIBSS client not configured")
 	}
-	pacs002, err := iso.nibssClient.ProcessFundsTransferSettlement(ctx, payload)
+	pacs002, err := iso.ProcessFundsTransferSettlement(ctx, payload)
 	if err != nil {
-		return models.SettlementResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
+		return models.FundsTransferResult{}, fmt.Errorf("failed to send pacs.008 to settlement: %w", err)
 	}
 
 	if pacs002 == nil || len(pacs002.TxInfAndSts) == 0 {
-		return models.SettlementResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
+		return models.FundsTransferResult{}, fmt.Errorf("pacs.002 response missing TxInfAndSts")
 	}
 
 	txSts := pacs002.TxInfAndSts[0]
 	if txSts.TxSts == nil {
-		return models.SettlementResult{}, fmt.Errorf("pacs.002 TxSts is nil")
+		return models.FundsTransferResult{}, fmt.Errorf("pacs.002 TxSts is nil")
 	}
 
 	status := string(*txSts.TxSts)
-	result := models.SettlementResult{Status: status}
+	result := models.FundsTransferResult{Status: status}
 
 	if txSts.OrgnlTxId != nil {
-		result.TransactionID = string(*txSts.OrgnlTxId)
+		result.SessionID = string(*txSts.OrgnlTxId)
 	}
 
 	if status == "RJCT" && len(txSts.StsRsnInf) > 0 && txSts.StsRsnInf[0].Rsn != nil && txSts.StsRsnInf[0].Rsn.Cd != nil {
@@ -213,6 +248,82 @@ func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_
 	}
 
 	return result, nil
+}
+
+func (iso *ISO20022Service) ProcessFundsTransferSettlement(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
+	// Create a child context with PACS timeout
+	opCtx, cancel := context.WithTimeout(ctx, iso.pacsTimeout)
+	defer cancel()
+
+	body, err := iso.ISO20022Breaker.Execute(func() (any, error) {
+		req, err := http.NewRequestWithContext(opCtx, "POST", iso.GetPACSBaseURL(), bytes.NewBuffer(xmlData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set(constants.ContentType, constants.XMLContentType)
+		// req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", iso.apiKey))
+
+		resp, err := iso.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to execute request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
+		}
+
+		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
+		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+			return nil, fmt.Errorf("failed to decode pacs.002 response: %w", err)
+		}
+		return &pacs002, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
+}
+
+func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
+	// Create a child context with PACS timeout
+	opCtx, cancel := context.WithTimeout(ctx, iso.pacsTimeout)
+	defer cancel()
+
+	body, err := iso.ISO20022Breaker.Execute(func() (interface{}, error) {
+		req, err := http.NewRequestWithContext(opCtx, "POST", iso.GetPACSBaseURL(), bytes.NewBuffer(xmlData))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pacs.028 request: %w", err)
+		}
+		req.Header.Set(constants.ContentType, constants.XMLContentType)
+		// req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", iso.apiKey))
+
+		resp, err := iso.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("pacs.028 request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 500 {
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+		}
+
+		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
+		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+			return nil, fmt.Errorf("failed to decode pacs.002 status response: %w", err)
+		}
+		return &pacs002, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body.(*pacs_v08.FIToFIPaymentStatusReportV08), nil
 }
 
 // CreatePacs008 creates a pacs.008 FIToFICustomerCreditTransfer message
@@ -254,7 +365,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.TransactionRecord) (*pacs_v
 					},
 				},
 				Dbtr: pacs_v08.PartyIdentification135{
-					Nm: &[]common.Max140Text{common.Max140Text(tx.FromAccountID)}[0],
+					Nm: &[]common.Max140Text{common.Max140Text(tx.OriginatorAccount)}[0],
 				},
 				CdtrAgt: pacs_v08.BranchAndFinancialInstitutionIdentification6{
 					FinInstnId: pacs_v08.FinancialInstitutionIdentification18{
@@ -264,7 +375,7 @@ func (iso *ISO20022Service) CreatePacs008(tx *models.TransactionRecord) (*pacs_v
 					},
 				},
 				Cdtr: pacs_v08.PartyIdentification135{
-					Nm: &[]common.Max140Text{common.Max140Text(tx.ToAccountID)}[0],
+					Nm: &[]common.Max140Text{common.Max140Text(tx.BeneficiaryAccount)}[0],
 				},
 			},
 		},
@@ -356,7 +467,7 @@ func (iso *ISO20022Service) CreatePacs028(originalMsgID, originalTxID string) (*
 }
 
 // RequestPaymentStatus sends a pacs.028 to NIBSS and returns the pacs.002 status response
-func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMsgID, originalTxID string) (models.SettlementResult, error) {
+func (iso *ISO20022Service) RequestTxPaymentStatus(ctx context.Context, originalMsgID, originalTxID string) (models.SettlementResult, error) {
 	pacs028, err := iso.CreatePacs028(originalMsgID, originalTxID)
 	if err != nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to build pacs.028: %w", err)
@@ -370,7 +481,7 @@ func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, originalMs
 	if iso.nibssClient == nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to request payment status: NIBSS client not configured")
 	}
-	pacs002, err := iso.nibssClient.RequestPaymentStatus(ctx, []byte(xmlData))
+	pacs002, err := iso.RequestPaymentStatus(ctx, []byte(xmlData))
 	if err != nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to request payment status: %w", err)
 	}
