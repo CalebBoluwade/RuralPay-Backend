@@ -17,7 +17,7 @@ import (
 )
 
 func TestISO20022Service_ConvertToISO20022(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("successful conversion", func(t *testing.T) {
 		tx := models.TransactionRecord{
@@ -72,7 +72,7 @@ func TestISO20022Service_ConvertToISO20022(t *testing.T) {
 }
 
 func TestISO20022Service_ProcessSettlement(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("settlement fails when NIBSS unreachable", func(t *testing.T) {
 		tx := models.TransactionRecord{
@@ -105,7 +105,7 @@ func TestISO20022Service_ProcessSettlement(t *testing.T) {
 }
 
 func TestISO20022Service_CreatePacs008(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("create valid pacs008", func(t *testing.T) {
 		tx := &models.TransactionRecord{
@@ -130,7 +130,7 @@ func TestISO20022Service_CreatePacs008(t *testing.T) {
 }
 
 func TestISO20022Service_CreatePacs002(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("create valid pacs002", func(t *testing.T) {
 		tx := &models.TransactionRecord{
@@ -149,7 +149,7 @@ func TestISO20022Service_CreatePacs002(t *testing.T) {
 }
 
 func TestISO20022Service_ConvertToXML(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("convert to XML", func(t *testing.T) {
 		tx := &models.TransactionRecord{
@@ -180,7 +180,7 @@ func TestISO20022Service_ConvertToXML(t *testing.T) {
 }
 
 func TestISO20022Service_ConvertTransaction(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("convert transaction", func(t *testing.T) {
 		tx := &models.TransactionRecord{
@@ -198,7 +198,7 @@ func TestISO20022Service_ConvertTransaction(t *testing.T) {
 }
 
 func TestISO20022Service_CreatePacs028(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("create valid pacs028", func(t *testing.T) {
 		doc, err := service.CreatePacs028("msg-001", "tx123")
@@ -228,16 +228,16 @@ func TestISO20022Service_CreatePacs028(t *testing.T) {
 }
 
 func TestISO20022Service_RequestPaymentStatus(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("fails when NIBSS unreachable", func(t *testing.T) {
-		_, err := service.RequestPaymentStatus(context.Background(), "msg-001", "tx123")
+		_, err := service.RequestTxPaymentStatus(context.Background(), "msg-001", "tx123")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to request payment status")
 	})
 
 	t.Run("fails with empty originalMsgID", func(t *testing.T) {
-		_, err := service.RequestPaymentStatus(context.Background(), "", "tx123")
+		_, err := service.RequestTxPaymentStatus(context.Background(), "", "tx123")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to build pacs.028")
 	})
@@ -249,7 +249,7 @@ func newTestISO20022Service(t *testing.T) (*ISO20022Service, *rsa.PrivateKey, *r
 	require.NoError(t, err)
 	nibssPriv, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	svc := NewISO20022Service()
+	svc := NewISO20022Service(nil)
 	svc.senderPriv = senderPriv
 	svc.nibssPub = &nibssPriv.PublicKey
 	svc.recipientPriv = nibssPriv
@@ -290,7 +290,7 @@ func TestISO20022Service_SignXML(t *testing.T) {
 	})
 
 	t.Run("no keys configured returns error", func(t *testing.T) {
-		svc := NewISO20022Service()
+		svc := NewISO20022Service(nil)
 		_, err := svc.SignXML("<Document>test</Document>")
 		assert.ErrorContains(t, err, "signing keys not configured")
 	})
@@ -344,7 +344,7 @@ func TestISO20022Service_SignedMessageJSON(t *testing.T) {
 }
 
 func TestISO20022Service_SendToSettlement(t *testing.T) {
-	service := NewISO20022Service()
+	service := NewISO20022Service(nil)
 
 	t.Run("send to settlement fails when NIBSS unreachable", func(t *testing.T) {
 		tx := &models.TransactionRecord{
