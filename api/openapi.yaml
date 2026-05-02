@@ -1,0 +1,89 @@
+openapi: 3.0.3
+info:
+  title: NFC Payments Backend API
+  description: API for NFC-based payment processing system
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+paths:
+  /transactions:
+    post:
+      tags: [transactions]
+      summary: Create transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Transaction'
+      responses:
+        '200':
+          description: Success
+    get:
+      tags: [transactions]
+      summary: List transactions
+      parameters:
+        - name: cardId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+  /transactions/batch:
+    post:
+      tags: [transactions]
+      summary: Batch transactions
+      responses:
+        '200':
+          description: Success
+  /transactions/{txId}:
+    get:
+      tags: [transactions]
+      summary: Get transaction
+      parameters:
+        - name: txId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+  /cards/provision:
+    post:
+      tags: [cards]
+      summary: Provision card
+      responses:
+        '200':
+          description: Success
+  /cards/{cardId}:
+    get:
+      tags: [cards]
+      summary: Get card
+      parameters:
+        - name: cardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Success
+components:
+  schemas:
+    Transaction:
+      type: object
+      properties:
+        txId:
+          type: string
+        cardId:
+          type: string
+        amount:
+          type: integer
+        currency:
+          type: string

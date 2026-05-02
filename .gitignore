@@ -39,5 +39,4 @@ dist/
 build/
 keys/
 swagger*
-api/
 main
