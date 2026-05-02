@@ -155,7 +155,6 @@ jobs:
               --name ruralpay-backend \
               --restart unless-stopped \
               -p 8080:8080 \
-              --env-file /home/${{ secrets.EC2_USER }}/.env \
               -v /home/${{ secrets.EC2_USER }}/keys:/app/keys:ro \
               -v /home/${{ secrets.EC2_USER }}/logs:/app/logs \
               ruralpay-backend:${{ github.sha }}
