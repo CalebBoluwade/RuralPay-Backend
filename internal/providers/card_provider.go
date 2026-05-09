@@ -109,7 +109,7 @@ func (p *CardPaymentProvider) ProcessPayment(ctx context.Context, req *models.Pa
 		Timestamp: time.Now(),
 		EventType: "TRANSFER",
 		TxRequest: req,
-		Details: map[string]interface{}{
+		Details: map[string]any{
 			"merchantID": cardReq.MerchantID,
 		},
 	}

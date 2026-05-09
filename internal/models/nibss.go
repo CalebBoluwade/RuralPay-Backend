@@ -46,9 +46,13 @@ type MandateResponse struct {
 }
 
 type IdentificationVerificationResponse struct {
-	XMLName     xml.Name `xml:"IdVrfctnRpt" json:"-"`
-	Verified    bool     `json:"verified" xml:"Rpt>Vrfctn"`
-	AccountName string   `json:"accountName" xml:"Rpt>OrgnlPtyAndAcctId>Pty>Nm"`
+	XMLName       xml.Name `xml:"IdVrfctnRpt" json:"-"`
+	Verified      bool     `json:"verified" xml:"Rpt>Vrfctn"`
+	AccountName   string   `json:"accountName" xml:"Rpt>UpdtdPtyAndAcctId>Pty>Nm"`
+	AccountNumber string   `json:"accountNumber" xml:"Rpt>OrgnlPtyAndAcctId>Acct>Id>IBAN"`
+	OriginalMsgId string   `json:"originalMsgId" xml:"OrgnlAssgnmt>MsgId"`
+	BVN           string   `json:"bvn" xml:"SplmtryData>Envlp>CustomData>CreditorInfo>IdValue"`
+	RiskRating    string   `json:"riskRating" xml:"SplmtryData>Envlp>CustomData>TransactionInfo>RiskRating"`
 }
 
 // NIP SOAP models

@@ -103,6 +103,8 @@ func init() {
 
 	// NIBSS ISO 20022 per-message-family endpoints
 	_ = viper.BindEnv("nibss.iso20022.base.url", "NIBSS_ISO20022_BASE_URL")
+	_ = viper.BindEnv("nibss.institution_name", "NIBSS_INSTITUTION_NAME")
+	_ = viper.BindEnv("nibss.institution_bank_code", "NIBSS_INSTITUTION_BANK_CODE")
 
 	// ISO 8583 (card payment settlement)
 	_ = viper.BindEnv("nibss.iso8583.base_url", "NIBSS_ISO8583_BASE_URL")

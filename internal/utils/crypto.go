@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -84,6 +85,51 @@ func OpenMessage(msg *SignedMessage, senderPub *rsa.PublicKey, recipientPriv *rs
 		return nil, errors.New("ciphertext too short")
 	}
 	return gcm.Open(nil, msg.EncryptedPayload[:nonceSize], msg.EncryptedPayload[nonceSize:], nil)
+}
+
+// AppendXMLDSig computes a W3C XML Digital Signature (enveloped, RSA-SHA256) over xmlDoc
+// and returns the document with the <Signature> block appended before </ns2:Document>.
+//
+// The digest is SHA-256 over the raw document bytes (enveloped transform removes the
+// Signature element itself, but since we append after the fact the digest is over the
+// document as-is before the signature block is added — matching NIBSS behaviour).
+func AppendXMLDSig(xmlDoc string, priv *rsa.PrivateKey) (string, error) {
+	if priv == nil {
+		return xmlDoc, nil
+	}
+
+	// Digest over the document content (before the Signature element is added)
+	digestBytes := sha256.Sum256([]byte(xmlDoc))
+	digestB64 := base64.StdEncoding.EncodeToString(digestBytes[:])
+
+	// RSA-SHA256 signature over the digest
+	sig, err := rsa.SignPKCS1v15(rand.Reader, priv, crypto.SHA256, digestBytes[:])
+	if err != nil {
+		return "", err
+	}
+	sigB64 := base64.StdEncoding.EncodeToString(sig)
+
+	signatureBlock := `<Signature xmlns="http://www.w3.org/2000/09/xmldsig#">` +
+		`<SignedInfo>` +
+		`<CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>` +
+		`<SignatureMethod Algorithm="http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"/>` +
+		`<Reference URI="">` +
+		`<Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms>` +
+		`<DigestMethod Algorithm="http://www.w3.org/2001/04/xmlenc#sha256"/>` +
+		`<DigestValue>` + digestB64 + `</DigestValue>` +
+		`</Reference>` +
+		`</SignedInfo>` +
+		`<SignatureValue>` + sigB64 + `</SignatureValue>` +
+		`</Signature>`
+
+	// Insert before the closing Document tag
+	const closingTag = `</ns2:Document>`
+	idx := len(xmlDoc) - len(closingTag)
+	if idx < 0 || xmlDoc[idx:] != closingTag {
+		// Fallback: just append
+		return xmlDoc + signatureBlock, nil
+	}
+	return xmlDoc[:idx] + signatureBlock + closingTag, nil
 }
 
 // ParseRSAPrivateKey decodes a PEM-encoded PKCS#8 or PKCS#1 RSA private key.

@@ -116,7 +116,7 @@ func (c *NIBSSClient) VerifyBVN(ctx context.Context, bvn, phoneNumber string) (*
 	opCtx, cancel := context.WithTimeout(ctx, c.bvnTimeout)
 	defer cancel()
 
-	result, err := c.bvnBreaker.Execute(func() (interface{}, error) {
+	result, err := c.bvnBreaker.Execute(func() (any, error) {
 		reqBody := models.BVNVerifyRequest{BVN: bvn, PhoneNumber: phoneNumber}
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
@@ -163,7 +163,7 @@ func (c *NIBSSClient) GetAccountMandate(ctx context.Context, bankCode, accountNu
 	opCtx, cancel := context.WithTimeout(ctx, c.mandateTimeout)
 	defer cancel()
 
-	result, err := c.mandateBreaker.Execute(func() (interface{}, error) {
+	result, err := c.mandateBreaker.Execute(func() (any, error) {
 		reqBody := models.MandateRequest{BankCode: bankCode, AccountNumber: accountNumber}
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
@@ -472,7 +472,7 @@ func (c *NIBSSClient) DialISO8583(ctx context.Context, deadline time.Time) (net.
 // before sending the 0200 settlement. Retained for endpoints that require session key
 // negotiation. Use ProcessCardSettlement for the standard NIBSS settlement endpoint.
 func (c *NIBSSClient) ProcessCardSettlementWithKeyExchange(ctx context.Context, req0800 *iso8583.Message, isoMsgPayload *iso8583.Message) (*models.CardSettlementResponse, error) {
-	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
+	body, err := c.circuitBreaker.Execute(func() (any, error) {
 		deadline, _ := ctx.Deadline()
 		if deadline.IsZero() {
 			deadline = time.Now().Add(c.cardSettlementTimeout)
@@ -568,7 +568,7 @@ func (c *NIBSSClient) ProcessCardSettlementWithKeyExchange(ctx context.Context, 
 }
 
 func (c *NIBSSClient) ProcessCardSettlement(ctx context.Context, isoMsgPayload *iso8583.Message) (*models.CardSettlementResponse, error) {
-	body, err := c.circuitBreaker.Execute(func() (interface{}, error) {
+	body, err := c.circuitBreaker.Execute(func() (any, error) {
 		deadline, _ := ctx.Deadline()
 		if deadline.IsZero() {
 			deadline = time.Now().Add(c.cardSettlementTimeout)

@@ -7,8 +7,12 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -251,7 +255,6 @@ func (iso *ISO20022Service) SendToSettlement(ctx context.Context, pacs008 *pacs_
 }
 
 func (iso *ISO20022Service) ProcessFundsTransferSettlement(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
-	// Create a child context with PACS timeout
 	opCtx, cancel := context.WithTimeout(ctx, iso.pacsTimeout)
 	defer cancel()
 
@@ -260,8 +263,11 @@ func (iso *ISO20022Service) ProcessFundsTransferSettlement(ctx context.Context, 
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-		req.Header.Set(constants.ContentType, constants.XMLContentType)
-		// req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", iso.apiKey))
+		req.Header.Set(constants.ContentType, "text/xml; charset=utf-8")
+		req.Header.Set("Accept", "text/xml")
+		if apiKey := viper.GetString("nibss.api_key"); apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 
 		resp, err := iso.httpClient.Do(req)
 		if err != nil {
@@ -269,15 +275,21 @@ func (iso *ISO20022Service) ProcessFundsTransferSettlement(ctx context.Context, 
 		}
 		defer resp.Body.Close()
 
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read pacs.002 response body: %w", err)
+		}
+		slog.Debug("PACS.002 Response", "status", resp.StatusCode, "body", string(respBody))
+
 		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("NIBSS API returned status %d: %s", resp.StatusCode, string(respBody))
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("NIBSS API returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("NIBSS API returned status %d: %s", resp.StatusCode, string(respBody))
 		}
 
 		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
-		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+		if err := xml.NewDecoder(bytes.NewReader(respBody)).Decode(&pacs002); err != nil {
 			return nil, fmt.Errorf("failed to decode pacs.002 response: %w", err)
 		}
 		return &pacs002, nil
@@ -289,17 +301,19 @@ func (iso *ISO20022Service) ProcessFundsTransferSettlement(ctx context.Context, 
 }
 
 func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, xmlData []byte) (*pacs_v08.FIToFIPaymentStatusReportV08, error) {
-	// Create a child context with PACS timeout
-	opCtx, cancel := context.WithTimeout(ctx, iso.pacsTimeout)
+	httpCtx, cancel := context.WithTimeout(context.Background(), utils.GetTimeout("nibss.acmt_send_timeout", 10))
 	defer cancel()
 
-	body, err := iso.ISO20022Breaker.Execute(func() (interface{}, error) {
-		req, err := http.NewRequestWithContext(opCtx, "POST", iso.GetPACSBaseURL(), bytes.NewBuffer(xmlData))
+	body, err := iso.ISO20022Breaker.Execute(func() (any, error) {
+		req, err := http.NewRequestWithContext(httpCtx, "POST", iso.GetPACSBaseURL(), bytes.NewBuffer(xmlData))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create pacs.028 request: %w", err)
 		}
-		req.Header.Set(constants.ContentType, constants.XMLContentType)
-		// req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", iso.apiKey))
+		req.Header.Set(constants.ContentType, "text/xml; charset=utf-8")
+		req.Header.Set("Accept", "text/xml")
+		if apiKey := viper.GetString("nibss.api_key"); apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 
 		resp, err := iso.httpClient.Do(req)
 		if err != nil {
@@ -307,15 +321,21 @@ func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, xmlData []
 		}
 		defer resp.Body.Close()
 
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read pacs.028 response body: %w", err)
+		}
+		slog.Debug("PACS.028 Response", "status", resp.StatusCode, "body", string(respBody))
+
 		if resp.StatusCode >= 500 {
-			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d: %s", resp.StatusCode, string(respBody))
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("NIBSS pacs.028 API returned status %d: %s", resp.StatusCode, string(respBody))
 		}
 
 		var pacs002 pacs_v08.FIToFIPaymentStatusReportV08
-		if err := xml.NewDecoder(resp.Body).Decode(&pacs002); err != nil {
+		if err := xml.NewDecoder(bytes.NewReader(respBody)).Decode(&pacs002); err != nil {
 			return nil, fmt.Errorf("failed to decode pacs.002 status response: %w", err)
 		}
 		return &pacs002, nil
@@ -328,7 +348,11 @@ func (iso *ISO20022Service) RequestPaymentStatus(ctx context.Context, xmlData []
 
 // CreatePacs008 creates a pacs.008 FIToFICustomerCreditTransfer message
 func (iso *ISO20022Service) CreatePacs008(tx *models.TransactionRecord) (*pacs_v08.FIToFICustomerCreditTransferV08, error) {
-	msgId := uuid.New().String()
+	senderBankCode := viper.GetString("nibss.institution_bank_code")
+	if senderBankCode == "" {
+		senderBankCode = viper.GetString("nip.bank_code")
+	}
+	msgId := utils.GenerateISO20022MsgId(senderBankCode)
 	creDtTm := time.Now()
 	settlementDate := time.Now()
 
@@ -407,26 +431,51 @@ func (iso *ISO20022Service) CreatePacs002(tx *models.TransactionRecord, status s
 	return doc, nil
 }
 
-// CreateAcmt023 builds an acmt.023 Identification Verification Request for the given account
-func (iso *ISO20022Service) CreateAcmt023(accountNumber, bankCode string) (*acmt_v02.IdentificationVerificationRequestV02, error) {
-	msgID := common.Max35Text(uuid.New().String())
+// CreateAcmt023 builds an acmt.023 Identification Verification Request for the given account.
+// senderName and senderBankCode identify the originating institution (Cretr/Assgnr).
+func (iso *ISO20022Service) CreateAcmt023(accountNumber, bankCode, senderName, senderBankCode string) (*acmt_v02.IdentificationVerificationRequestV02, error) {
+	msgID := common.Max35Text(utils.GenerateISO20022MsgId(senderBankCode))
 	now := common.ISODateTime(time.Now())
+
+	senderBICFI := common.BICFIDec2014Identifier(senderBankCode)
+	assgneeBICFI := common.BICFIDec2014Identifier(bankCode)
 
 	doc := &acmt_v02.IdentificationVerificationRequestV02{
 		Assgnmt: acmt_v02.IdentificationAssignment2{
 			MsgId:   msgID,
 			CreDtTm: now,
-			Assgnr:  acmt_v02.Party12Choice{Pty: acmt_v02.PartyIdentification43{}},
-			Assgne:  acmt_v02.Party12Choice{Pty: acmt_v02.PartyIdentification43{Nm: ptr140(bankCode)}},
+			Cretr: &acmt_v02.Party12Choice{
+				Pty: acmt_v02.PartyIdentification43{Nm: ptr140(senderName)},
+			},
+			Assgnr: acmt_v02.Party12Choice{
+				Pty: acmt_v02.PartyIdentification43{Nm: ptr140(senderName)},
+				Agt: acmt_v02.BranchAndFinancialInstitutionIdentification5{
+					FinInstnId: acmt_v02.FinancialInstitutionIdentification8{
+						BICFI: (*common.BICFIIdentifier)(ptr35(string(senderBICFI))),
+						ClrSysMmbId: &acmt_v02.ClearingSystemMemberIdentification2{
+							MmbId: common.Max35Text(senderBankCode),
+						},
+					},
+				},
+			},
+			Assgne: acmt_v02.Party12Choice{
+				Agt: acmt_v02.BranchAndFinancialInstitutionIdentification5{
+					FinInstnId: acmt_v02.FinancialInstitutionIdentification8{
+						BICFI: (*common.BICFIIdentifier)(ptr35(string(assgneeBICFI))),
+						ClrSysMmbId: &acmt_v02.ClearingSystemMemberIdentification2{
+							MmbId: common.Max35Text(bankCode),
+						},
+					},
+				},
+			},
 		},
 		Vrfctn: []acmt_v02.IdentificationVerification2{
 			{
 				Id: msgID,
 				PtyAndAcctId: acmt_v02.IdentificationInformation2{
+					Pty: &acmt_v02.PartyIdentification43{Nm: ptr140(accountNumber)},
 					Acct: &acmt_v02.AccountIdentification4Choice{
-						Othr: acmt_v02.GenericAccountIdentification1{
-							Id: common.Max34Text(accountNumber),
-						},
+						IBAN: common.IBAN2007Identifier(accountNumber),
 					},
 				},
 			},
@@ -435,18 +484,21 @@ func (iso *ISO20022Service) CreateAcmt023(accountNumber, bankCode string) (*acmt
 	return doc, nil
 }
 
-func ptr140(s string) *common.Max140Text { return new(common.Max140Text(s)) }
-func ptr35(s string) *common.Max35Text   { return new(common.Max35Text(s)) }
+func ptr140(s string) *common.Max140Text { v := common.Max140Text(s); return &v }
+func ptr35(s string) *common.Max35Text   { v := common.Max35Text(s); return &v }
 
 // CreatePacs028 builds a pacs.028 FIToFIPaymentStatusRequest for the given original transaction
 func (iso *ISO20022Service) CreatePacs028(originalMsgID, originalTxID string) (*pacs_v04.FIToFIPaymentStatusRequestV04, error) {
 	if originalMsgID == "" || originalTxID == "" {
 		return nil, fmt.Errorf("originalMsgID and originalTxID are required")
 	}
-
+	senderBankCode := viper.GetString("nibss.institution_bank_code")
+	if senderBankCode == "" {
+		senderBankCode = viper.GetString("nip.bank_code")
+	}
 	doc := &pacs_v04.FIToFIPaymentStatusRequestV04{
 		GrpHdr: pacs_v04.GroupHeader91{
-			MsgId:   common.Max35Text(uuid.New().String()),
+			MsgId:   common.Max35Text(utils.GenerateISO20022MsgId(senderBankCode)),
 			CreDtTm: common.ISODateTime(time.Now()),
 		},
 		OrgnlGrpInf: []pacs_v04.OriginalGroupInformation27{
@@ -473,7 +525,7 @@ func (iso *ISO20022Service) RequestTxPaymentStatus(ctx context.Context, original
 		return models.SettlementResult{}, fmt.Errorf("failed to build pacs.028: %w", err)
 	}
 
-	xmlData, err := iso.ConvertToXML(pacs028)
+	xmlData, err := iso.ConvertPacs028ToXML(pacs028)
 	if err != nil {
 		return models.SettlementResult{}, fmt.Errorf("failed to convert pacs.028 to XML: %w", err)
 	}
@@ -509,11 +561,84 @@ func (iso *ISO20022Service) RequestTxPaymentStatus(ctx context.Context, original
 	return result, nil
 }
 
+// stripAcmt023EmptyElements removes empty structural tags that the moov-io library
+// unconditionally emits for non-pointer value fields (Party12Choice, AccountIdentification4Choice).
+func stripAcmt023EmptyElements(s string) string {
+	empty := []string{
+		`<Othr><Id></Id></Othr>`,
+		`<Othr><Id/></Othr>`,
+		`<Agt><FinInstnId></FinInstnId></Agt>`,
+		`<Agt><FinInstnId/></Agt>`,
+		`<Nm></Nm>`,
+		`<Nm/>`,
+		`<Pty></Pty>`,
+		`<Pty/>`,
+		`<Cretr></Cretr>`,
+		`<Cretr/>`,
+		`<IBAN></IBAN>`,
+		`<IBAN/>`,
+	}
+	for _, pat := range empty {
+		s = strings.ReplaceAll(s, pat, "")
+	}
+	return s
+}
+
+// convertToNIBSSXML is the shared serialiser for all outbound NIBSS ISO 20022 messages.
+// It applies: seconds-only CreDtTm, standalone="no" declaration, ns2:Document namespace
+// wrapper, and appends the XMLDSig signature.
+func (iso *ISO20022Service) convertToNIBSSXML(doc any, namespace string) (string, error) {
+	common.DateTimeFormatString = "2006-01-02T15:04:05"
+	defer func() { common.DateTimeFormatString = common.DefaultDateTimeFormat }()
+
+	xmlData, err := xml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal XML: %w", err)
+	}
+	body := strings.ReplaceAll(string(xmlData), "<IBAN></IBAN>", "")
+	body = strings.ReplaceAll(body, "<IBAN/>", "")
+	result := `<?xml version="1.0" encoding="UTF-8" standalone="no"?>` +
+		`<ns2:Document xmlns:ns2="` + namespace + `">` +
+		body +
+		`</ns2:Document>`
+	return utils.AppendXMLDSig(result, iso.senderPriv)
+}
+
 // ConvertToXML converts ISO20022 document to XML string
 func (iso *ISO20022Service) ConvertToXML(doc any) (string, error) {
 	xmlData, err := xml.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal XML: %w", err)
 	}
-	return xml.Header + string(xmlData), nil
+	result := strings.ReplaceAll(string(xmlData), "<IBAN></IBAN>", "")
+	result = strings.ReplaceAll(result, "<IBAN/>", "")
+	return xml.Header + result, nil
+}
+
+// ConvertAcmt023ToXML marshals an acmt.023 document, strips moov-io empty-element
+// artifacts, and wraps it in the ISO 20022 Document namespace envelope NIBSS expects.
+func (iso *ISO20022Service) ConvertAcmt023ToXML(doc *acmt_v02.IdentificationVerificationRequestV02) (string, error) {
+	common.DateTimeFormatString = "2006-01-02T15:04:05"
+	defer func() { common.DateTimeFormatString = common.DefaultDateTimeFormat }()
+
+	xmlData, err := xml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal acmt.023 XML: %w", err)
+	}
+	cleaned := stripAcmt023EmptyElements(string(xmlData))
+	cleaned = regexp.MustCompile(`<Acct><IBAN>([^<]*)</IBAN></Acct>`).
+		ReplaceAllString(cleaned, "<Acct><Id><IBAN>$1</IBAN></Id></Acct>")
+	result := `<?xml version="1.0" encoding="UTF-8" standalone="no"?>` +
+		`<ns2:Document xmlns:ns2="urn:iso:std:iso:20022:tech:xsd:acmt.023.001.04">` +
+		cleaned +
+		`</ns2:Document>`
+	return utils.AppendXMLDSig(result, iso.senderPriv)
+}
+
+func (iso *ISO20022Service) ConvertPacs008ToXML(doc *pacs_v08.FIToFICustomerCreditTransferV08) (string, error) {
+	return iso.convertToNIBSSXML(doc, "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08")
+}
+
+func (iso *ISO20022Service) ConvertPacs028ToXML(doc *pacs_v04.FIToFIPaymentStatusRequestV04) (string, error) {
+	return iso.convertToNIBSSXML(doc, "urn:iso:std:iso:20022:tech:xsd:pacs.028.001.04")
 }

@@ -255,7 +255,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 			slog.Error("auth.login.db_error", "error", err)
 			utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusFailedDependency, nil)
 		}
-		go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+		go s.audit.LogActivity(context.Background(), models.ActivityEvent{
 			EventType: "LOGIN_FAILED",
 			IPAddress: utils.RealIP(r),
 			Details:   map[string]any{"identifier": req.Identifier},
@@ -279,7 +279,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	if !verifyPassword(password, hashedPassword) {
 		slog.Warn("auth.login.invalid_password")
-		go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+		go s.audit.LogActivity(context.Background(), models.ActivityEvent{
 			EventType: "LOGIN_FAILED",
 			UserID:    fmt.Sprintf("%d", user.ID),
 			IPAddress: utils.RealIP(r),
@@ -365,7 +365,7 @@ func (s *UserService) UserLogin(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("auth.login.success", "user_id", user.ID)
 
-	go s.audit.LogActivity(reqCtx, models.ActivityEvent{
+	go s.audit.LogActivity(context.Background(), models.ActivityEvent{
 		EventType: "LOGIN_SUCCESS",
 		UserID:    fmt.Sprintf("%d", user.ID),
 		IPAddress: utils.RealIP(r),

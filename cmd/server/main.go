@@ -147,6 +147,9 @@ func main() {
 	accountService := services.NewAccountService(db, redisClient)
 	cardService := services.NewCardService(db, hsm)
 	iso20022Service := services.NewISO20022Service(redisClient)
+	useISO20022 := viper.GetBool("nibss.use_iso20022")
+	nameEnquirySvc := services.NewNameEnquiryService(useISO20022, redisClient)
+	fundsTransferSvc := services.NewFundsTransferService(useISO20022, redisClient)
 	merchantService := services.NewMerchantService(db)
 	transactionQueryService := services.NewTransactionQueryService(db, hsm)
 	voucherService := services.NewVoucherService(db)
@@ -154,7 +157,46 @@ func main() {
 	// Initialize unified payment handler
 	paymentHandler := handlers.NewPaymentHandler(db, redisClient, hsm, bankService)
 	feedbackHandler := handlers.NewFeedbackHandler(db, notificationService)
-	isoCallbackHandler := handlers.NewISO20022CallbackHandler(iso20022Service)
+
+	// Extract notifier/processor interfaces — all nil-safe when NIP mode is active.
+	var acmt024Notifier services.ACMT024Notifier
+	if n, ok := nameEnquirySvc.(services.ACMT024Notifier); ok {
+		acmt024Notifier = n
+	}
+	var pacs002Notifier services.PACS002Notifier
+	var pacs008Processor services.PACS008Processor
+	var pacs028Processor services.PACS028Processor
+	if n, ok := fundsTransferSvc.(services.PACS002Notifier); ok {
+		pacs002Notifier = n
+	}
+	if n, ok := fundsTransferSvc.(services.PACS008Processor); ok {
+		pacs008Processor = n
+	}
+	if n, ok := fundsTransferSvc.(services.PACS028Processor); ok {
+		pacs028Processor = n
+	}
+	// Initialise dedicated ISO 20022 callback logger
+	callbackLogger, callbackLogCloser, err := appLogger.NewCallbackLogger(
+		&slog.HandlerOptions{Level: logLevel},
+		appLogger.RotationConfig{
+			MaxSizeMB:  viper.GetInt("log.max_size_mb"),
+			MaxBackups: viper.GetInt("log.max_backups"),
+			MaxAgeDays: viper.GetInt("log.max_age_days"),
+			Compress:   true,
+		}, dev)
+	if err != nil {
+		slog.Warn("server.callback_logger.init_failed", "error", err)
+		callbackLogger = structuredLogger
+	} else {
+		defer callbackLogCloser.Close()
+		callbackLogger = callbackLogger.With(
+			slog.String("app", "RuralPay"),
+			slog.String("env", viper.GetString("app.env")),
+			slog.String("version", viper.GetString("app.version")),
+		)
+	}
+
+	isoCallbackHandler := handlers.NewISO20022CallbackHandler(iso20022Service, acmt024Notifier, pacs002Notifier, pacs008Processor, pacs028Processor, callbackLogger)
 	healthHandler := handlers.NewHealthHandler(db, redisClient)
 
 	// Initialize auth middleware with Redis
@@ -230,6 +272,7 @@ func main() {
 			r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
 			r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
 			r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
+			r.Post("/admi002", isoCallbackHandler.ReceiveAdmi002)
 		})
 	} else {
 		// Authentication disabled (development/testing only)
@@ -239,6 +282,7 @@ func main() {
 		r.Post("/pacs028", isoCallbackHandler.ReceivePacs028)
 		r.Post("/acmt023", isoCallbackHandler.ReceiveAcmt023)
 		r.Post("/acmt024", isoCallbackHandler.ReceiveAcmt024)
+		r.Post("/admi002", isoCallbackHandler.ReceiveAdmi002)
 	}
 
 	// API routes

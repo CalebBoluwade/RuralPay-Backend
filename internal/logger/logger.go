@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/spf13/viper"
 	"gopkg.in/lumberjack.v2"
 )
 
@@ -138,6 +139,21 @@ func New(logFile string, opts *slog.HandlerOptions, rot RotationConfig, dev bool
 		handler = &piiMaskingHandler{inner: base}
 	}
 	return slog.New(handler), rotator, nil
+}
+
+// NewCallbackLogger creates a dedicated logger for ISO 20022 callback operations,
+// writing to a separate file alongside the main log.
+func NewCallbackLogger(opts *slog.HandlerOptions, rot RotationConfig, dev bool) (*slog.Logger, io.Closer, error) {
+	mainLog := viper.GetString("log.file")
+	if mainLog == "" {
+		mainLog = "./logs/app.log"
+	}
+	callbackLog := strings.TrimSuffix(mainLog, filepath.Ext(mainLog)) + "_callbacks" + filepath.Ext(mainLog)
+	l, closer, err := New(callbackLog, opts, rot, dev)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l.With(slog.String("logger", "iso20022_callback")), closer, nil
 }
 
 // MaskMessage is a convenience helper for masking ad-hoc strings (e.g. in legacy log.Printf calls).

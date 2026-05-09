@@ -338,7 +338,7 @@ func (s *MerchantService) ListMerchants(w http.ResponseWriter, r *http.Request) 
 	status := r.URL.Query().Get("status")
 
 	query := "SELECT id, user_id, business_name, business_type, tax_id, status, commission_rate, settlement_cycle, created_at, updated_at FROM merchants"
-	args := []interface{}{}
+	args := []any{}
 
 	if status != "" {
 		query += " WHERE status = $1"

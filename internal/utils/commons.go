@@ -104,6 +104,11 @@ func GenerateNIPSessionId(nipBankCode string) string {
 	return nipBankCode + time.Now().Format("060102150405") + generateRandomNumericString(12)
 }
 
+// GenerateISO20022MsgId generates a 35-char ISO 20022 MsgId: "{6-digit bankCode}{yyyyMMddHHmmss}{15RandomDigits}"
+func GenerateISO20022MsgId(bankCode string) string {
+	return bankCode + time.Now().Format("20060102150405") + generateRandomNumericString(15)
+}
+
 // GenerateMandateRef generates a mandate reference: "{prefix}/{yyMMddHHmmss}/{8RandomDigits}"
 func GenerateMandateRef(prefix string) string {
 	if prefix == "" {
