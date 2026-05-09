@@ -314,6 +314,15 @@ func main() {
 		})
 
 		r.Get("/banks", bankService.GetAllBanks)
+		r.Get("/banks/nps-participants", func(w http.ResponseWriter, r *http.Request) {
+			participants, err := bankService.GetNPSParticipants(r.Context())
+			if err != nil {
+				slog.Error("handler.nps_participants.failed", "error", err)
+				utils.SendErrorResponse(w, utils.InternalServiceError, http.StatusBadGateway, nil)
+				return
+			}
+			utils.SendSuccessResponse(w, "NPS Participants Fetched Successfully", participants, http.StatusOK)
+		})
 
 		// Feedback endpoints (public — clicked from email links)
 		r.Get("/feedback", feedbackHandler.HandleTransactionRating)

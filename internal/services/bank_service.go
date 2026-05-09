@@ -66,6 +66,13 @@ func NewBankService(db *sql.DB) *BankService {
 }
 
 // GetNPSParticipants calls the NPS getParticipants endpoint and returns the list of participants.
+// @Summary Get NPS participants
+// @Description Get the list of active and inactive participants on the National Payment Stack
+// @Tags Banks
+// @Produce json
+// @Success 200 {object} utils.APISuccessResponse{details=[]NPSParticipant}
+// @Failure 502 {object} utils.APIErrorResponse
+// @Router /banks/nps-participants [get]
 func (bs *BankService) GetNPSParticipants(ctx context.Context) ([]NPSParticipant, error) {
 	npsIP := viper.GetString("nibss.iso20022.base.url")
 	if npsIP == "" {
@@ -97,6 +104,14 @@ func (bs *BankService) GetNPSParticipants(ctx context.Context) ([]NPSParticipant
 	return result.Participants, nil
 }
 
+// GetAllBanks returns all banks
+// @Summary Get all banks
+// @Description Get a list of all supported banks with logos
+// @Tags Banks
+// @Produce json
+// @Success 200 {object} utils.APISuccessResponse{details=[]Bank}
+// @Failure 500 {object} utils.APIErrorResponse
+// @Router /banks [get]
 func (bs *BankService) GetAllBanks(w http.ResponseWriter, r *http.Request) {
 	query := `
 		SELECT bankCode, cbnCode, name, logo_filename, 99 

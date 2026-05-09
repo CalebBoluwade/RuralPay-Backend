@@ -40,3 +40,4 @@ build/
 keys/
 swagger*
 main
+server

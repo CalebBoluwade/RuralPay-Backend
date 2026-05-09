@@ -778,6 +778,49 @@ const docTemplate = `{
                 }
             }
         },
+        "/admi002": {
+            "post": {
+                "description": "Callback endpoint to receive an inbound ISO20022 admi.002 message reject",
+                "consumes": [
+                    "text/xml"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ISO20022 Callbacks"
+                ],
+                "summary": "Receive admi.002",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "messageType": {
+                                    "type": "string"
+                                },
+                                "orgnlMsgId": {
+                                    "type": "string"
+                                },
+                                "rejectReason": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/data-plans": {
             "get": {
                 "description": "Get a list of available data plans",
@@ -792,10 +835,22 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/models.DataPlan"
-                            }
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/utils.APISuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "details": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.DataPlan"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 }
@@ -1191,6 +1246,88 @@ const docTemplate = `{
                         "description": "Invalid request or token",
                         "schema": {
                             "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/banks": {
+            "get": {
+                "description": "Get a list of all supported banks with logos",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Banks"
+                ],
+                "summary": "Get all banks",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/utils.APISuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "details": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/services.Bank"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/banks/nps-participants": {
+            "get": {
+                "description": "Get the list of active and inactive participants on the National Payment Stack",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Banks"
+                ],
+                "summary": "Get NPS participants",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/utils.APISuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "details": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/services.NPSParticipant"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
                         }
                     }
                 }
@@ -2728,6 +2865,19 @@ const docTemplate = `{
                 }
             }
         },
+        "models.NotificationChannel": {
+            "type": "string",
+            "enum": [
+                "PUSH",
+                "EMAIL",
+                "SMS"
+            ],
+            "x-enum-varnames": [
+                "ChannelPush",
+                "ChannelEmail",
+                "ChannelSMS"
+            ]
+        },
         "models.PaymentMode": {
             "type": "string",
             "enum": [
@@ -2757,6 +2907,9 @@ const docTemplate = `{
                 "twoFAType"
             ],
             "properties": {
+                "IPAddress": {
+                    "type": "string"
+                },
                 "amount": {
                     "type": "integer"
                 },
@@ -2802,7 +2955,9 @@ const docTemplate = `{
                 "twoFAType": {
                     "type": "string",
                     "enum": [
-                        "BYPASS"
+                        "BYPASS",
+                        "OTP",
+                        "BIOMETRIC"
                     ]
                 },
                 "txType": {
@@ -2933,6 +3088,9 @@ const docTemplate = `{
                 "amount": {
                     "type": "integer"
                 },
+                "beneficiary_account": {
+                    "type": "string"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -2948,9 +3106,6 @@ const docTemplate = `{
                 "fee": {
                     "type": "integer"
                 },
-                "from_account_id": {
-                    "type": "string"
-                },
                 "id": {
                     "type": "integer"
                 },
@@ -2959,6 +3114,12 @@ const docTemplate = `{
                 },
                 "metadata": {
                     "$ref": "#/definitions/models.Metadata"
+                },
+                "narration": {
+                    "type": "string"
+                },
+                "originator_account": {
+                    "type": "string"
                 },
                 "processed_at": {
                     "type": "string"
@@ -2976,9 +3137,6 @@ const docTemplate = `{
                     "$ref": "#/definitions/models.TransactionStatus"
                 },
                 "sync_status": {
-                    "type": "string"
-                },
-                "to_account_id": {
                     "type": "string"
                 },
                 "to_bank_code": {
@@ -3004,7 +3162,7 @@ const docTemplate = `{
                 "PENDING",
                 "COMPLETED",
                 "FAILED",
-                "Cancelled",
+                "CANCELLED",
                 "FAILED_SETTLEMENT",
                 "FAILED_ISO_CONVERSION"
             ],
@@ -3093,6 +3251,9 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "notifications": {
+                    "$ref": "#/definitions/models.UserNotifications"
+                },
                 "phoneNumber": {
                     "description": "User phone number",
                     "type": "string",
@@ -3108,6 +3269,9 @@ const docTemplate = `{
                     "type": "string",
                     "example": "user"
                 },
+                "transactionLimits": {
+                    "$ref": "#/definitions/models.UserTransactionLimits"
+                },
                 "updatedAt": {
                     "type": "string"
                 },
@@ -3115,6 +3279,40 @@ const docTemplate = `{
                     "description": "User username",
                     "type": "string",
                     "example": "johndoe"
+                }
+            }
+        },
+        "models.UserNotifications": {
+            "type": "object",
+            "properties": {
+                "devicePush": {
+                    "type": "boolean"
+                },
+                "email": {
+                    "type": "boolean"
+                },
+                "preferredChannels": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.NotificationChannel"
+                    }
+                },
+                "sms": {
+                    "type": "boolean"
+                },
+                "userId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "models.UserTransactionLimits": {
+            "type": "object",
+            "properties": {
+                "dailyLimit": {
+                    "type": "number"
+                },
+                "singleTransactionLimit": {
+                    "type": "number"
                 }
             }
         },
@@ -3144,6 +3342,26 @@ const docTemplate = `{
                 }
             }
         },
+        "services.Bank": {
+            "type": "object",
+            "properties": {
+                "bankCode": {
+                    "type": "string"
+                },
+                "cbnCode": {
+                    "type": "string"
+                },
+                "logoData": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "uptimePrediction": {
+                    "type": "number"
+                }
+            }
+        },
         "services.MerchantStats": {
             "type": "object",
             "properties": {
@@ -3170,6 +3388,41 @@ const docTemplate = `{
                 },
                 "totalProfit": {
                     "type": "number"
+                }
+            }
+        },
+        "services.NPSParticipant": {
+            "type": "object",
+            "properties": {
+                "bicfic": {
+                    "type": "string"
+                },
+                "categoryCode": {
+                    "type": "string"
+                },
+                "countryCode": {
+                    "type": "string"
+                },
+                "currencies": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "institutionCode": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "operationsAllowed": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
                 }
             }
         },
