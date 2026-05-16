@@ -1,5 +1,10 @@
 package services
 
+////////////////////////////////////////////////////////////////////////////
+// NOTE: These tests are currently skipped as they require significant setup and mocking of database interactions.
+// They should be implemented in the future to ensure the correctness of the DoubleLedgerService.
+////////////////////////////////////////////////////////////////////////////
+
 // import (
 // 	"testing"
 // 	"time"
