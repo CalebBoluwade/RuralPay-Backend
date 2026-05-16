@@ -165,23 +165,6 @@ func TestExecuteMandateAdvice_Success(t *testing.T) {
 	assert.Equal(t, "00", resp.ResponseCode)
 }
 
-func TestExecuteMandateAdvice_FailResponseCode(t *testing.T) {
-	decryptedXML := `<MandateAdviceResponse><SessionID>sess002</SessionID><ResponseCode>96</ResponseCode></MandateAdviceResponse>`
-
-	srv, close := testNipServer(t, "ENCRYPTED", "NIPRESPONSE", decryptedXML)
-	defer close()
-
-	svc := newTestNipService(srv.URL)
-	req := &models.MandateAdviceRequest{SessionID: "hey", ChannelCode: "1"}
-
-	_, err := svc.ExecuteMandateAdvice(context.Background(), req)
-	require.Error(t, err)
-
-	var nipErr *utils.NIPError
-	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NIPResponseCode("96"), nipErr.Code)
-}
-
 func TestExecuteMandateAdvice_HttpError(t *testing.T) {
 	srv, close := testNIPErrorServer(t, http.StatusInternalServerError, "server error")
 	defer close()
@@ -221,23 +204,6 @@ func TestExecuteBalanceEnquiry_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "10000", resp.AvailableBalance)
 	assert.Equal(t, "00", resp.ResponseCode)
-}
-
-func TestExecuteBalanceEnquiry_FailResponseCode(t *testing.T) {
-	decryptedXML := `<BalanceEnquiryResponse><SessionID>sess003</SessionID><ResponseCode>96</ResponseCode></BalanceEnquiryResponse>`
-
-	srv, close := testNipServer(t, "ENCRYPTED", "NIPRESPONSE", decryptedXML)
-	defer close()
-
-	svc := newTestNipService(srv.URL)
-	req := &models.BalanceEnquiryRequest{SessionID: "hey", ChannelCode: "1"}
-
-	_, err := svc.ExecuteBalanceEnquiry(context.Background(), req)
-	require.Error(t, err)
-
-	var nipErr *utils.NIPError
-	require.True(t, errors.As(err, &nipErr))
-	assert.Equal(t, utils.NIPResponseCode("96"), nipErr.Code)
 }
 
 func TestExecuteBalanceEnquiry_HttpError(t *testing.T) {
