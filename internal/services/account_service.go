@@ -74,6 +74,18 @@ func NewAccountService(db *sql.DB, redisClient *redis.Client) *AccountService {
 	}
 }
 
+// LinkAccount Adds Users Account
+// @Summary Adds Users Account
+// @Description Adds Users Account
+// @Tags Accounts
+// @Produce json
+// @Param LinkAccountRequest body LinkAccountRequest true "Link Account Request"
+// @Success 200 {object} object{responseCode=string,accountId=string,accountName=string,status=string,source=string}
+// @Failure 400 {object} utils.APIErrorResponse
+// @Failure 403 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Security BearerAuth
+// @Router /account/link [post]
 func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	slog.Info("Account.Link_Account.Start")
 	userID, _ := utils.ExtractUserMerchantInfoFromContext(w, r.Context())
@@ -93,10 +105,63 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mandateResp, err := s.nibssClient.NameEnquiry.EnquireName(r.Context(), req.AccountNumber, req.BankCode)
+	// 1. Combined query: Check if account exists AND fetch user BVN (single DB round trip)
+	var existingAccountID sql.NullInt64
+	var userBVN string
+	err := s.db.QueryRow(`
+		SELECT 
+			(SELECT account_id FROM accounts WHERE user_id = $1 AND account_id = $2 AND bank_code = $3 AND status = 'ACTIVE' LIMIT 1),
+			COALESCE((SELECT bvn FROM users WHERE id = $1), '')
+	`, userID, req.AccountNumber, req.BankCode).Scan(&existingAccountID, &userBVN)
+
+	if err != nil {
+		slog.Error("Account.Link_Account.Check_Account_Failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Check Account", http.StatusFailedDependency, nil)
+		return
+	}
+
+	if existingAccountID.Valid {
+		// Account already exists
+		slog.Warn("Account.Link_Account.Account_Already_Linked", "user_id", userID, "account_id", sanitizeAcct(req.AccountNumber), "bank_code", req.BankCode)
+		utils.SendErrorResponse(w, "Account Already Linked To This User", http.StatusConflict, nil)
+		return
+	}
+
+	nipCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	nameEnquiryResp, err := s.nibssClient.NameEnquiry.EnquireName(nipCtx, req.AccountNumber, req.BankCode)
 	if err != nil {
 		slog.Error("Account.Link_Account.Name_Enquiry_Failed", "error", err)
-		utils.SendErrorResponse(w, "Failed to Verify Account", http.StatusBadGateway, nil)
+		if errors.Is(err, context.DeadlineExceeded) || utils.IsNetworkError(err) {
+			utils.SendErrorResponse(w, utils.NIPServiceUnavailable, http.StatusServiceUnavailable, nil)
+		} else {
+			utils.SendErrorResponse(w, "Failed to Verify Account", http.StatusBadGateway, nil)
+		}
+		return
+	}
+
+	// Validate that user's BVN matches the BVN from Name Enquiry
+	if userBVN != "" && nameEnquiryResp.BankVerificationNumber != "" && userBVN != nameEnquiryResp.BankVerificationNumber {
+		slog.Warn("Account.Link_Account.BVN_Mismatch", "user_id", userID, "account_id", sanitizeAcct(req.AccountNumber))
+		utils.SendErrorResponse(w, "BVN does not match the account holder's BVN", http.StatusUnprocessableEntity, nil)
+		return
+	}
+
+	mandateResp, err := s.nibssClient.MandateAdvice.CreateMandate(r.Context(), &models.CreateMandateRequest{
+		DebitAccountName:                  nameEnquiryResp.AccountName,
+		DebitAccountNumber:                req.AccountNumber,
+		DebitBankCode:                     req.BankCode,
+		DebitBankName:                     nameEnquiryResp.BankName,
+		DebitBankVerificationNumber:       userBVN,
+		DebitKycLevel:                     "3",
+		BeneficiaryAccountName:            nameEnquiryResp.AccountName,
+		BeneficiaryAccountNumber:          nameEnquiryResp.AccountNumber,
+		BeneficiaryKycLevel:               nameEnquiryResp.KYCLevel,
+		BeneficiaryBankVerificationNumber: userBVN,
+	})
+	if err != nil {
+		slog.Error("Account.Link_Account.Mandate_Creation_Failed", "error", err)
+		utils.SendErrorResponse(w, "Failed to Create Mandate", http.StatusFailedDependency, nil)
 		return
 	}
 
@@ -109,8 +174,8 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		)
 		INSERT INTO accounts (account_name, account_id, bank_name, bank_code, mandate_code, user_id, is_primary, balance, version, updated_at)
 		VALUES ($3, $4, $5, $6, $7, $1, $2, 0, 1, NOW())
-		RETURNING id`,
-		userID, req.IsPrimary, mandateResp.AccountName, req.AccountNumber, mandateResp.BankName, req.BankCode, mandateResp,
+		RETURNING account_id`,
+		userID, req.IsPrimary, mandateResp.AccountName, req.AccountNumber, nameEnquiryResp.BankName, req.BankCode, mandateResp.MandateCode,
 	).Scan(&accountID)
 	if err != nil {
 		slog.Error("Account.Link_Account.Insert_Failed", "error", err)
@@ -123,7 +188,7 @@ func (s *AccountService) LinkAccount(w http.ResponseWriter, r *http.Request) {
 		UserID:        userID,
 		AccountNumber: req.AccountNumber,
 		AccountName:   mandateResp.AccountName,
-		BankName:      mandateResp.BankName,
+		BankName:      nameEnquiryResp.BankName,
 		BankCode:      req.BankCode,
 		IsPrimary:     req.IsPrimary,
 	}
@@ -249,10 +314,16 @@ func (s *AccountService) AccountNameEnquiry(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	neResult, err := s.nibssClient.NameEnquiry.EnquireName(r.Context(), accountId, bankCode)
+	nipCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	neResult, err := s.nibssClient.NameEnquiry.EnquireName(nipCtx, accountId, bankCode)
 	if err != nil {
 		slog.Error("Account.Name_Enquiry.External_Failed", "error", err, "account_id", sanitizeAcct(accountId))
-		utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		if errors.Is(err, context.DeadlineExceeded) || utils.IsNetworkError(err) {
+			utils.SendErrorResponse(w, utils.NIPServiceUnavailable, http.StatusServiceUnavailable, nil)
+		} else {
+			utils.SendErrorResponse(w, utils.AccountNotFoundError, http.StatusNotFound, nil)
+		}
 		return
 	}
 
@@ -368,12 +439,12 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 				resultCh <- nipResult{accountID: accountID, balanceSuccess: false}
 				return
 			}
-			resultCh <- nipResult{accountID: accountID, balance: bal.Balance, balanceSuccess: true}
+			resultCh <- nipResult{accountID: accountID, balance: bal.AvailableBalance, balanceSuccess: true}
 		}(a.accountID, a.name, a.bankCode, a.bvn, a.mandateCode)
 	}
 
 	type nipBalance struct {
-		balance  string
+		balance string
 		success bool
 	}
 	nipBalances := make(map[string]nipBalance, external)
@@ -401,7 +472,7 @@ func (s *AccountService) AccountBalanceEnquiry(w http.ResponseWriter, r *http.Re
 			entry["availableBalance"] = nip.balance
 			entry["balanceAvailable"] = true
 		} else {
-			entry["availableBalance"] = nil
+			entry["availableBalance"] = "Balance Unavailable"
 			entry["balanceAvailable"] = false
 		}
 		accounts = append(accounts, entry)
@@ -709,26 +780,13 @@ func (s *AccountService) GenerateQRCode(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	var req struct {
+		Size int `json:"size"`
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1_048_576)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	json.NewDecoder(r.Body).Decode(&req)
 
-	// if err := dec.Decode(&req); err != nil {
-	// 	services.utils.SendErrorResponse(w, "Unable To Process This Request At This Time", http.StatusBadRequest, nil)
-	// 	return
-	// }
-
-	// if err := dec.Decode(&struct{}{}); err != io.EOF {
-	// 	services.utils.SendErrorResponse(w, string(utils.SingleObjectError), http.StatusBadRequest, nil)
-	// 	return
-	// }
-
-	// if err := h.validator.ValidateStruct(&req); err != nil {
-	// 	services.utils.SendErrorResponse(w, string(utils.ValidationError), http.StatusBadRequest, err)
-	// 	return
-	// }
-
-	qrCode, qrImage, err := s.qrService.GenerateQRCode(r.Context(), strconv.Itoa(userID), strconv.Itoa(merchantID))
+	qrCode, qrImage, err := s.qrService.GenerateQRCode(r.Context(), strconv.Itoa(userID), strconv.Itoa(merchantID), req.Size)
 	if err != nil {
 		slog.Error("account.GenerateQR.generate_error", "error", err)
 		utils.SendErrorResponse(w, utils.ResponseMessage(err.Error()), http.StatusFailedDependency, nil)
@@ -1025,4 +1083,32 @@ func (s *AccountService) ValidateFacialIdentity(w http.ResponseWriter, r *http.R
 	utils.SendSuccessResponse(w, "Validated Successfully", map[string]string{
 		"identityToken": identityToken,
 	}, http.StatusOK)
+}
+
+// DebitAccountInfo holds the fields needed to populate the debit side of a NIP transfer.
+type DebitAccountInfo struct {
+	AccountName string
+	BVN         string
+	MandateCode string
+	BankCode    string
+	KYCLevel    string
+}
+
+// GetDebitAccountInfo fetches account_name, bvn, mandate_code and bank_code for the
+// given account number from the accounts + users tables.
+func (s *AccountService) GetDebitAccountInfo(ctx context.Context, accountNumber string) (*DebitAccountInfo, error) {
+	var info DebitAccountInfo
+	err := s.db.QueryRowContext(ctx, `
+		SELECT a.account_name, COALESCE(u.bvn, ''), COALESCE(a.mandate_code, ''), COALESCE(a.bank_code, ''),
+		       COALESCE(ul.kyc_level::text, '1')
+		FROM accounts a
+		JOIN users u ON u.id = a.user_id
+		LEFT JOIN user_limits ul ON ul.user_id = a.user_id
+		WHERE a.account_id = $1 AND a.status = 'ACTIVE'
+		LIMIT 1
+	`, accountNumber).Scan(&info.AccountName, &info.BVN, &info.MandateCode, &info.BankCode, &info.KYCLevel)
+	if err != nil {
+		return nil, fmt.Errorf("GetDebitAccountInfo: %w", err)
+	}
+	return &info, nil
 }

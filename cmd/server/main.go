@@ -399,11 +399,13 @@ func main() {
 	})
 
 	// Start server
+	// WriteTimeout must exceed the chi middleware.Timeout value (60s) so the
+	// server does not close the connection before slow NIP/NIBSS calls complete.
 	server := &http.Server{
 		Addr:         ":" + port,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 90 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

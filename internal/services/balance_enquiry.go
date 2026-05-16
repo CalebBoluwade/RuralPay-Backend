@@ -12,11 +12,11 @@ import (
 
 // BalanceEnquiryResult is the normalised output of any balance enquiry call.
 type BalanceEnquiryResult struct {
-	AccountNumber string
-	AccountName   string
-	BankCode      string
-	Balance       string
-	SessionID     string
+	AccountNumber    string
+	AccountName      string
+	BankCode         string
+	AvailableBalance string
+	SessionID        string
 }
 
 // BalanceEnquiryService abstracts account balance lookup.
@@ -52,16 +52,22 @@ func (s *nipBalanceEnquiry) GetBalance(ctx context.Context, accountNumber, accou
 		return nil, fmt.Errorf("NIP balance enquiry failed: %w", err)
 	}
 
-	if resp.ResponseCode != "00" {
-		slog.Error("nip.balance_enquiry.failed", "account", accountNumber, "bank_code", bankCode, "response_code", resp.ResponseCode)
+	if s.nip.checkResponseCode(resp.ResponseCode, "balance enquiry") != nil {
+		slog.Error("nip.balance_enquiry.failed", "account", accountNumber, "available_balance", resp.AvailableBalance, "bank_code", bankCode, "response_code", resp.ResponseCode)
 		return nil, utils.NewNIPError(utils.NIPResponseCode(resp.ResponseCode))
 	}
 
+	// Default to "0" if AvailableBalance is empty
+	balance := resp.AvailableBalance
+	if balance == "" {
+		balance = "0"
+	}
+
 	return &BalanceEnquiryResult{
-		SessionID:     resp.SessionID,
-		AccountNumber: resp.TargetAccountNumber,
-		AccountName:   resp.TargetAccountName,
-		BankCode:      bankCode,
-		Balance:       resp.AvailableBalance,
+		SessionID:        resp.SessionID,
+		AccountNumber:    resp.TargetAccountNumber,
+		AccountName:      resp.TargetAccountName,
+		BankCode:         bankCode,
+		AvailableBalance: balance,
 	}, nil
 }

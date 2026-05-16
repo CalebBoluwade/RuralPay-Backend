@@ -132,10 +132,20 @@ func (s *DoubleLedgerService) Reverse(transactionId string) error {
 }
 
 func (s *DoubleLedgerService) TransferTx(ctx context.Context, tx *sql.Tx, fromAccountID, toAccountID, transactionId string, amount int64) error {
+	// Resolve the local credit account: use toAccountID if it exists locally, otherwise use the system transit account
+	localCreditID := toAccountID
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = $1)`, toAccountID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		localCreditID = s.systemFeeAccount
+	}
+
 	// Lock accounts in consistent order to prevent deadlocks
-	firstLock, secondLock := fromAccountID, toAccountID
-	if fromAccountID > toAccountID {
-		firstLock, secondLock = toAccountID, fromAccountID
+	firstLock, secondLock := fromAccountID, localCreditID
+	if fromAccountID > localCreditID {
+		firstLock, secondLock = localCreditID, fromAccountID
 	}
 
 	fromAccount, err := s.lockAccount(tx, firstLock)
@@ -148,20 +158,19 @@ func (s *DoubleLedgerService) TransferTx(ctx context.Context, tx *sql.Tx, fromAc
 		return err
 	}
 
-	// Determine which locked account is sender/receiver
 	if firstLock != fromAccountID {
 		fromAccount, toAccount = toAccount, fromAccount
 	}
 
-	if fromAccount.Balance < amount {
-		return fmt.Errorf("insufficient balance")
-	}
+	// if fromAccount.Balance < amount {
+	// 	return fmt.Errorf("insufficient balance")
+	// }
 
-	if err := s.createLedgerEntry(context.Background(), tx, transactionId, fromAccount.ID, -amount, models.DebitPayment, fromAccount.Balance-amount); err != nil {
+	if err := s.createLedgerEntry(ctx, tx, transactionId, fromAccount.ID, -amount, models.DebitPayment, fromAccount.Balance-amount); err != nil {
 		return err
 	}
 
-	if err := s.createLedgerEntry(context.Background(), tx, transactionId, toAccount.ID, amount, models.CreditPayment, toAccount.Balance+amount); err != nil {
+	if err := s.createLedgerEntry(ctx, tx, transactionId, toAccount.ID, amount, models.CreditPayment, toAccount.Balance+amount); err != nil {
 		return err
 	}
 
@@ -187,7 +196,7 @@ func (s *DoubleLedgerService) appendPaymentState(tx *sql.Tx, transactionId, stat
 func (s *DoubleLedgerService) lockAccount(tx *sql.Tx, accountID string) (*models.Account, error) {
 	var account models.Account
 	err := tx.QueryRow(`
-		SELECT id, balance, version, updated_at 
+		SELECT account_id, balance, version, updated_at 
 		FROM accounts 
 		WHERE account_id = $1
 		LIMIT 1
@@ -208,7 +217,7 @@ func (s *DoubleLedgerService) updateAccountBalance(tx *sql.Tx, accountID string,
 	result, err := tx.Exec(`
 		UPDATE accounts 
 		SET balance = $1, version = version + 1, updated_at = $2 
-		WHERE id = $3 AND version = $4`,
+		WHERE account_id = $3 AND version = $4`,
 		newBalance, time.Now(), accountID, version)
 
 	if err != nil {

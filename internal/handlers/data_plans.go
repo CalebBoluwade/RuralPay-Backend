@@ -13,7 +13,7 @@ import (
 // @Tags Data Plans
 // @Produce json
 // @Success 200 {object} utils.APISuccessResponse{details=[]models.DataPlan}
-// @Router /api/v1/data-plans [get]
+// @Router /data-plans [get]
 func GetDataPlans(w http.ResponseWriter, r *http.Request) {
 	dataPlans := []models.DataPlan{
 		{ID: "1", Size: "1GB", Validity: "1 Day", Price: 300},

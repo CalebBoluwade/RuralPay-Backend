@@ -316,10 +316,7 @@ func (svc *NIBSSNIPService) ExecuteMandateAdvice(ctx context.Context, req *model
 		slog.Error("nip.mandate_advice.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
 		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
-	if err := svc.checkResponseCode(resp.ResponseCode, "mandate advice"); err != nil {
-		slog.Error("nip.mandate_advice.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
-		return nil, err
-	}
+
 	slog.Info("nip.mandate_advice.success", "sessionId", resp.SessionID, "responseCode", resp.ResponseCode)
 	return resp, nil
 }
@@ -337,11 +334,8 @@ func (svc *NIBSSNIPService) ExecuteBalanceEnquiry(ctx context.Context, req *mode
 		slog.Error("nip.balance_enquiry.xml_deserialize_failed", "sessionId", req.SessionID, "error", err, "raw_xml", decrypted)
 		return nil, utils.NewNIPError(utils.NIPResponseCode("99"), err)
 	}
-	if err := svc.checkResponseCode(resp.ResponseCode, "balance enquiry"); err != nil {
-		slog.Error("nip.balance_enquiry.response_code_check_failed", "sessionId", resp.SessionID, "response_code", resp.ResponseCode, "error", err)
-		return nil, err
-	}
-	slog.Info("nip.balance_enquiry.success", "sessionId", resp.SessionID, "balance", resp.AvailableBalance)
+
+	slog.Info("nip.balance_enquiry.completed", "sessionId", resp.SessionID, "available_balance", resp.AvailableBalance)
 	return resp, nil
 }
 

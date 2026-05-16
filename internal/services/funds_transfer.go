@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,8 @@ import (
 type NIPFundsTransferImpl struct {
 	Redis      *redis.Client
 	NIPService *NIBSSNIPService
+	NE         NameEnquiryService
+	db         *sql.DB
 }
 
 // FundsTransferService abstracts fund transfer operations.
@@ -29,60 +32,64 @@ type FundsTransferService interface {
 	DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*models.FundsTransferResult, error)
 }
 
-func NewFundsTransferService(useNIBSSISOzNIPSwitch bool, redis *redis.Client) FundsTransferService {
+func NewFundsTransferService(useNIBSSISOzNIPSwitch bool, redis *redis.Client, db ...*sql.DB) FundsTransferService {
+	var dbConn *sql.DB
+	if len(db) > 0 {
+		dbConn = db[0]
+	}
 	// Return the default implementation (NIP or ISO 20022)
 	switch useNIBSSISOzNIPSwitch {
 	case true:
 		return newNIBSSISO20022FundsTransferImpl(redis)
 	case false:
-		return newNIPFundsTransferImpl(redis)
+		return newNIPFundsTransferImpl(redis, dbConn)
 	default:
 		return newNIBSSISO20022FundsTransferImpl(redis)
 	}
 }
 
-func newNIPFundsTransferImpl(redis *redis.Client) FundsTransferService {
-	return &NIPFundsTransferImpl{Redis: redis, NIPService: NewNIBSSNIPService()}
+func newNIPFundsTransferImpl(redis *redis.Client, db *sql.DB) FundsTransferService {
+	return &NIPFundsTransferImpl{Redis: redis, NIPService: NewNIBSSNIPService(), NE: newNIPNameEnquiry(redis), db: db}
 }
 
 func (s *NIPFundsTransferImpl) DoTransaction(ctx context.Context, sessionId string, req *models.PaymentRequest) (*models.FundsTransferResult, error) {
-	// Implementation for NIP fund transfer
-
-	user := models.UserTransactionMetaData{
-		NameEnquiryBeneficiaryAccountName:            "OgeTest",
-		NameEnquiryBeneficiaryAccountNumber:          req.BeneficiaryAccountNumber,
-		NameEnquiryBeneficiaryBankVerificationNumber: "22222222280",
-		NameEnquiryBeneficiaryKYCLevel:               "1",
-		NameEnquiryBeneficiaryBankCode:               fmt.Sprintf("%06s", req.BeneficiaryBankCode),
-
-		DebitMandateCode:            "0220310/003/0000072702",
-		DebitAccountName:            "John Doe",
-		DebitAccountNumber:          req.FromAccount,
-		DebitBankVerificationNumber: "22222222280",
-		DebitKYCLevel:               "1",
+	ne, err := s.NE.EnquireName(ctx, req.BeneficiaryAccountNumber, req.BeneficiaryBankCode)
+	if err != nil {
+		return nil, fmt.Errorf("funds_transfer.name_enquiry_failed: %w", err)
 	}
 
-	if s.Redis != nil {
-		// Fetch Name Enquiry Details For The Transaction
-		err := s.Redis.HGetAll(ctx, fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, req.TransactionID)).Scan(&user)
-		if err != nil {
-			slog.Error("funds_transfer.redis_user_metadata_failed", "account", req.FromAccount, "error", err)
-			return nil, fmt.Errorf("failed to fetch user metadata from Redis: %w", err)
-		}
+	user := models.UserTransactionMetaData{
+		NameEnquiryBeneficiaryAccountName:            ne.AccountName,
+		NameEnquiryBeneficiaryAccountNumber:          ne.AccountNumber,
+		NameEnquiryBeneficiaryBankVerificationNumber: ne.BankVerificationNumber,
+		NameEnquiryBeneficiaryKYCLevel:               ne.KYCLevel,
+		NameEnquiryBeneficiaryBankCode:               fmt.Sprintf("%06s", ne.BankCode),
 
-		slog.Debug("funds_transfer.redis_user_metadata_fetched", "account", req.FromAccount, "user_metadata", user)
+		DebitAccountNumber: req.FromAccount,
+	}
+
+	if s.db != nil {
+		debitInfo, err := (&AccountService{db: s.db}).GetDebitAccountInfo(ctx, req.FromAccount)
+		if err != nil {
+			slog.Error("funds_transfer.debit_account_lookup_failed", "account", req.FromAccount, "error", err)
+			return nil, fmt.Errorf("funds_transfer.debit_account_lookup_failed: %w", err)
+		}
+		user.DebitAccountName = debitInfo.AccountName
+		user.DebitBankVerificationNumber = debitInfo.BVN
+		user.DebitMandateCode = debitInfo.MandateCode
+		user.DebitKYCLevel = debitInfo.KYCLevel
 	}
 
 	slog.Info("funds_transfer.start", "from_account", req.FromAccount, "to_account", req.BeneficiaryAccountNumber, "amount", req.Amount)
 	debit, err := s.NIPService.ExecuteFundsTransferDebit(ctx, &models.FTSingleDebitRequest{
-		// XMLName: ,
 		SessionID:      sessionId,
+		NameEnquiryRef: ne.NameEnquirySessionId,
 		ChannelCode:    "1",
-		Amount:         fmt.Sprintf("%d", req.Amount),
+		Amount:         fmt.Sprintf("%.2f", float64(req.Amount)),
 		TransactionFee: "0.00",
 		Narration:      req.Narration,
 
-		DestinationInstitutionCode: fmt.Sprintf("%06s", req.BeneficiaryBankCode),
+		DestinationInstitutionCode: user.NameEnquiryBeneficiaryBankCode,
 
 		DebitAccountNumber:          user.DebitAccountNumber,
 		DebitAccountName:            user.DebitAccountName,
@@ -93,10 +100,10 @@ func (s *NIPFundsTransferImpl) DoTransaction(ctx context.Context, sessionId stri
 		BeneficiaryAccountNumber:          user.NameEnquiryBeneficiaryAccountNumber,
 		BeneficiaryAccountName:            user.NameEnquiryBeneficiaryAccountName,
 		BeneficiaryBankVerificationNumber: user.NameEnquiryBeneficiaryBankVerificationNumber,
-		BeneficiaryKYCLevel:               "1",
+		BeneficiaryKYCLevel:               user.NameEnquiryBeneficiaryKYCLevel,
 
 		TransactionLocation: fmt.Sprintf("%v,%v", req.Location.Latitude, req.Location.Longitude),
-		PaymentReference:    fmt.Sprintf("%s/%s", s.NIPService.GetNIPPaymentPrefix(), user.DebitMandateCode),
+		PaymentReference:    user.DebitMandateCode,
 	})
 
 	if err != nil {
@@ -108,13 +115,22 @@ func (s *NIPFundsTransferImpl) DoTransaction(ctx context.Context, sessionId stri
 		// Assuming debit is successful for demo purposes. In real implementation, use actual response code.
 
 		credit, err := s.NIPService.ExecuteFundsTransferCredit(ctx, &models.FTSingleCreditRequest{
-			// XMLName: ,
-			SessionID:                  sessionId,
-			DestinationInstitutionCode: req.Metadata["toBankCode"].(string),
-			DebitAccountNumber:         req.FromAccount,
-			//    req.BeneficiaryAccountNumber,
-			Amount:    fmt.Sprintf("%d", req.Amount),
-			Narration: fmt.Sprintf("Transfer from %s", req.FromAccount),
+			SessionID:                         sessionId,
+			NameEnquiryRef:                    ne.NameEnquirySessionId,
+			DestinationInstitutionCode:        user.NameEnquiryBeneficiaryBankCode,
+			ChannelCode:                       "1",
+			BeneficiaryAccountName:            user.NameEnquiryBeneficiaryAccountName,
+			BeneficiaryAccountNumber:          user.NameEnquiryBeneficiaryAccountNumber,
+			BeneficiaryBankVerificationNumber: user.NameEnquiryBeneficiaryBankVerificationNumber,
+			BeneficiaryKYCLevel:               user.NameEnquiryBeneficiaryKYCLevel,
+			OriginatorAccountName:             user.DebitAccountName,
+			OriginatorAccountNumber:           user.DebitAccountNumber,
+			OriginatorBankVerificationNumber:  user.DebitBankVerificationNumber,
+			OriginatorKYCLevel:                user.DebitKYCLevel,
+			TransactionLocation:               fmt.Sprintf("%v,%v", req.Location.Latitude, req.Location.Longitude),
+			Narration:                         req.Narration,
+			PaymentReference:                  user.DebitMandateCode,
+			Amount:                            fmt.Sprintf("%.2f", float64(req.Amount)),
 		})
 
 		if err != nil {

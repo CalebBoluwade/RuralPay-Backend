@@ -77,6 +77,19 @@ type NESingleResponse struct {
 	ResponseCode               string   `xml:"ResponseCode" json:"responseCode"`
 }
 
+type CreateMandateRequest struct {
+	DebitBankCode                     string `json:"debitBankCode"`
+	DebitAccountNumber                string `json:"debitAccountNumber"`
+	DebitAccountName                  string `json:"debitAccountName"`
+	DebitBankName                     string `json:"debitBankName"`
+	DebitBankVerificationNumber       string `json:"debitBankVerificationNumber"`
+	DebitKycLevel                     string `json:"debitKycLevel"`
+	BeneficiaryAccountName            string `json:"beneficiaryAccountName"`
+	BeneficiaryAccountNumber          string `json:"beneficiaryAccountNumber"`
+	BeneficiaryBankVerificationNumber string `json:"beneficiaryBankVerificationNumber"`
+	BeneficiaryKycLevel               string `json:"beneficiaryKycLevel"`
+}
+
 type MandateAdviceRequest struct {
 	XMLName                           xml.Name `xml:"MandateAdviceRequest" json:"-"`
 	SessionID                         string   `xml:"SessionID" json:"sessionId"`
@@ -139,6 +152,7 @@ type BalanceEnquiryResponse struct {
 type FTSingleDebitRequest struct {
 	XMLName                           xml.Name `xml:"FTSingleDebitRequest" json:"-"`
 	SessionID                         string   `xml:"SessionID" json:"sessionId"`
+	NameEnquiryRef                    string   `xml:"NameEnquiryRef" json:"nameEnquiryRef"`
 	DestinationInstitutionCode        string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                       string   `xml:"ChannelCode" json:"channelCode"`
 	BeneficiaryAccountName            string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
@@ -158,52 +172,67 @@ type FTSingleDebitRequest struct {
 }
 
 type FTSingleDebitResponse struct {
-	XMLName                    xml.Name `xml:"FTSingleDebitResponse" json:"-"`
-	SessionID                  string   `xml:"SessionID" json:"sessionId"`
-	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
-	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
-	BeneficiaryAccountName     string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
-	BeneficiaryAccountNumber   string   `xml:"BeneficiaryAccountNumber" json:"beneficiaryAccountNumber"`
-	DebitAccountName           string   `xml:"DebitAccountName" json:"debitAccountName"`
-	DebitAccountNumber         string   `xml:"DebitAccountNumber" json:"debitAccountNumber"`
-	TransactionLocation        string   `xml:"TransactionLocation" json:"transactionLocation"`
-	Narration                  string   `xml:"Narration" json:"narration"`
-	Amount                     string   `xml:"Amount" json:"amount"`
-	ResponseCode               string   `xml:"ResponseCode" json:"responseCode"`
+	XMLName                           xml.Name `xml:"FTSingleDebitResponse" json:"-"`
+	SessionID                         string   `xml:"SessionID" json:"sessionId"`
+	NameEnquiryRef                    string   `xml:"NameEnquiryRef" json:"nameEnquiryRef"`
+	DestinationInstitutionCode        string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
+	ChannelCode                       string   `xml:"ChannelCode" json:"channelCode"`
+	DebitAccountName                  string   `xml:"DebitAccountName" json:"debitAccountName"`
+	DebitAccountNumber                string   `xml:"DebitAccountNumber" json:"debitAccountNumber"`
+	DebitBankVerificationNumber       string   `xml:"DebitBankVerificationNumber" json:"debitBankVerificationNumber"`
+	DebitKYCLevel                     string   `xml:"DebitKYCLevel" json:"debitKycLevel"`
+	BeneficiaryAccountName            string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
+	BeneficiaryAccountNumber          string   `xml:"BeneficiaryAccountNumber" json:"beneficiaryAccountNumber"`
+	BeneficiaryBankVerificationNumber string   `xml:"BeneficiaryBankVerificationNumber" json:"beneficiaryBankVerificationNumber"`
+	BeneficiaryKYCLevel               string   `xml:"BeneficiaryKYCLevel" json:"beneficiaryKycLevel"`
+	TransactionLocation               string   `xml:"TransactionLocation" json:"transactionLocation"`
+	Narration                         string   `xml:"Narration" json:"narration"`
+	PaymentReference                  string   `xml:"PaymentReference" json:"paymentReference"`
+	MandateReferenceNumber            string   `xml:"MandateReferenceNumber" json:"mandateReferenceNumber"`
+	TransactionFee                    string   `xml:"TransactionFee" json:"transactionFee"`
+	Amount                            string   `xml:"Amount" json:"amount"`
+	ResponseCode                      string   `xml:"ResponseCode" json:"responseCode"`
 }
 
 type FTSingleCreditRequest struct {
 	XMLName                           xml.Name `xml:"FTSingleCreditRequest" json:"-"`
 	SessionID                         string   `xml:"SessionID" json:"sessionId"`
+	NameEnquiryRef                    string   `xml:"NameEnquiryRef" json:"nameEnquiryRef"`
 	DestinationInstitutionCode        string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
 	ChannelCode                       string   `xml:"ChannelCode" json:"channelCode"`
 	BeneficiaryAccountName            string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
 	BeneficiaryAccountNumber          string   `xml:"BeneficiaryAccountNumber" json:"beneficiaryAccountNumber"`
 	BeneficiaryBankVerificationNumber string   `xml:"BeneficiaryBankVerificationNumber" json:"beneficiaryBankVerificationNumber"`
 	BeneficiaryKYCLevel               string   `xml:"BeneficiaryKYCLevel" json:"beneficiaryKycLevel"`
-	DebitAccountName                  string   `xml:"DebitAccountName" json:"debitAccountName"`
-	DebitAccountNumber                string   `xml:"DebitAccountNumber" json:"debitAccountNumber"`
-	DebitBankVerificationNumber       string   `xml:"DebitBankVerificationNumber" json:"debitBankVerificationNumber"`
-	DebitKYCLevel                     string   `xml:"DebitKYCLevel" json:"debitKycLevel"`
+	OriginatorAccountName             string   `xml:"OriginatorAccountName" json:"originatorAccountName"`
+	OriginatorAccountNumber           string   `xml:"OriginatorAccountNumber" json:"originatorAccountNumber"`
+	OriginatorBankVerificationNumber  string   `xml:"OriginatorBankVerificationNumber" json:"originatorBankVerificationNumber"`
+	OriginatorKYCLevel                string   `xml:"OriginatorKYCLevel" json:"originatorKycLevel"`
 	TransactionLocation               string   `xml:"TransactionLocation" json:"transactionLocation"`
 	Narration                         string   `xml:"Narration" json:"narration"`
+	PaymentReference                  string   `xml:"PaymentReference" json:"paymentReference"`
 	Amount                            string   `xml:"Amount" json:"amount"`
-	TransactionFee                    string   `xml:"TransactionFee" json:"transactionFee"`
 }
 
 type FTSingleCreditResponse struct {
-	XMLName                    xml.Name `xml:"FTSingleCreditResponse" json:"-"`
-	SessionID                  string   `xml:"SessionID" json:"sessionId"`
-	DestinationInstitutionCode string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
-	ChannelCode                string   `xml:"ChannelCode" json:"channelCode"`
-	BeneficiaryAccountName     string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
-	BeneficiaryAccountNumber   string   `xml:"BeneficiaryAccountNumber" json:"beneficiaryAccountNumber"`
-	DebitAccountName           string   `xml:"DebitAccountName" json:"debitAccountName"`
-	DebitAccountNumber         string   `xml:"DebitAccountNumber" json:"debitAccountNumber"`
-	TransactionLocation        string   `xml:"TransactionLocation" json:"transactionLocation"`
-	Narration                  string   `xml:"Narration" json:"narration"`
-	Amount                     string   `xml:"Amount" json:"amount"`
-	ResponseCode               string   `xml:"ResponseCode" json:"responseCode"`
+	XMLName                           xml.Name `xml:"FTSingleCreditResponse" json:"-"`
+	SessionID                         string   `xml:"SessionID" json:"sessionId"`
+	NameEnquiryRef                    string   `xml:"NameEnquiryRef" json:"nameEnquiryRef"`
+	DestinationInstitutionCode        string   `xml:"DestinationInstitutionCode" json:"destinationInstitutionCode"`
+	ChannelCode                       string   `xml:"ChannelCode" json:"channelCode"`
+	BeneficiaryAccountName            string   `xml:"BeneficiaryAccountName" json:"beneficiaryAccountName"`
+	BeneficiaryAccountNumber          string   `xml:"BeneficiaryAccountNumber" json:"beneficiaryAccountNumber"`
+	BeneficiaryBankVerificationNumber string   `xml:"BeneficiaryBankVerificationNumber" json:"beneficiaryBankVerificationNumber"`
+	BeneficiaryKYCLevel               string   `xml:"BeneficiaryKYCLevel" json:"beneficiaryKycLevel"`
+	OriginatorAccountName             string   `xml:"OriginatorAccountName" json:"originatorAccountName"`
+	OriginatorAccountNumber           string   `xml:"OriginatorAccountNumber" json:"originatorAccountNumber"`
+	OriginatorBankVerificationNumber  string   `xml:"OriginatorBankVerificationNumber" json:"originatorBankVerificationNumber"`
+	OriginatorKYCLevel                string   `xml:"OriginatorKYCLevel" json:"originatorKycLevel"`
+	TransactionLocation               string   `xml:"TransactionLocation" json:"transactionLocation"`
+	Narration                         string   `xml:"Narration" json:"narration"`
+	PaymentReference                  string   `xml:"PaymentReference" json:"paymentReference"`
+	Amount                            string   `xml:"Amount" json:"amount"`
+	ResponseCode                      string   `xml:"ResponseCode" json:"responseCode"`
 }
 
 type TSQuerySingleRequest struct {

@@ -3,6 +3,7 @@ package utils
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -15,16 +16,27 @@ import (
 	"github.com/spf13/viper"
 )
 
+func IsNetworkError(err error) bool {
+	var netErr interface{ Timeout() bool }
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "dial tcp")
+}
+
 // GetTimeout Load Timeout Configurations with sensible defaults (in seconds)
 func GetTimeout(key string, defaultSecs int) time.Duration {
-	val := viper.GetDuration(key)
-	if val == 0 {
-		val = time.Duration(viper.GetInt(key)) * time.Second
+	if secs := viper.GetInt(key); secs > 0 {
+		return time.Duration(secs) * time.Second
 	}
-	if val == 0 {
-		val = time.Duration(defaultSecs) * time.Second
+	if val := viper.GetDuration(key); val >= time.Second {
+		return val
 	}
-	return val
+	return time.Duration(defaultSecs) * time.Second
 }
 
 func RealIP(r *http.Request) string {

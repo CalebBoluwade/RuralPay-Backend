@@ -106,15 +106,15 @@ func (ns *NotificationService) GetUserNotifications(w http.ResponseWriter, r *ht
 	utils.SendSuccessResponse(w, utils.ResponseMessage(fmt.Sprintf("%d Notifications Found", len(notifications))), notifications, http.StatusOK)
 }
 
-func (ns *NotificationService) SendPaymentNotification(ctx context.Context, transaction *models.TransactionRecord, notifType models.NotificationType) error {
-	payload := ns.buildPaymentPayload(4, transaction, notifType)
+func (ns *NotificationService) SendPaymentNotification(ctx context.Context, userId int, transaction *models.TransactionRecord, notifType models.NotificationType) error {
+	payload := ns.buildPaymentPayload(userId, transaction, notifType)
 	return ns.Route(payload)
 }
 
 func (ns *NotificationService) Route(payload *models.NotificationPayload) error {
 	slog.Info("notification.routing", "user_id", payload.UserID, "title", payload.Title)
 
-	user := ns.getUserPreferences(context.Background(), payload.UserID)
+	user := ns.GetUserPreferences(context.Background(), payload.UserID)
 
 	for _, channel := range user.Notifications.PreferredChannels {
 		switch channel {
@@ -394,7 +394,7 @@ func (ns *NotificationService) buildPaymentPayload(userId int, transaction *mode
 	}
 
 	slog.Info("notification.payload.building", "transaction_id", transaction.TransactionID, "status", transaction.Status, "type", notifType)
-	user := ns.getUserPreferences(context.Background(), userId)
+	user := ns.GetUserPreferences(context.Background(), userId)
 
 	return &models.NotificationPayload{
 		Type:          notifType,
@@ -551,7 +551,7 @@ func (ns *NotificationService) SendDeleteAccountEmail(user *models.User) error {
 	return nil
 }
 
-func (ns *NotificationService) getUserPreferences(ctx context.Context, id int) *models.User {
+func (ns *NotificationService) GetUserPreferences(ctx context.Context, id int) *models.User {
 	user := &models.User{ID: id}
 	var pushToken sql.NullString
 	var nDevicePush, nSMS, nEmail sql.NullBool

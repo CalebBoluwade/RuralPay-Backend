@@ -155,6 +155,83 @@ const docTemplate = `{
                 }
             }
         },
+        "/account/link": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Adds Users Account",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Accounts"
+                ],
+                "summary": "Adds Users Account",
+                "parameters": [
+                    {
+                        "description": "Link Account Request",
+                        "name": "LinkAccountRequest",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/services.LinkAccountRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "accountId": {
+                                    "type": "string"
+                                },
+                                "accountName": {
+                                    "type": "string"
+                                },
+                                "responseCode": {
+                                    "type": "string"
+                                },
+                                "source": {
+                                    "type": "string"
+                                },
+                                "status": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/utils.APIErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/account/name-enquiry": {
             "get": {
                 "security": [
@@ -816,41 +893,6 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/v1/data-plans": {
-            "get": {
-                "description": "Get a list of available data plans",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Data Plans"
-                ],
-                "summary": "Get data plans",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/utils.APISuccessResponse"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "details": {
-                                            "type": "array",
-                                            "items": {
-                                                "$ref": "#/definitions/models.DataPlan"
-                                            }
-                                        }
-                                    }
-                                }
-                            ]
                         }
                     }
                 }
@@ -1587,6 +1629,41 @@ const docTemplate = `{
                             "additionalProperties": {
                                 "type": "string"
                             }
+                        }
+                    }
+                }
+            }
+        },
+        "/data-plans": {
+            "get": {
+                "description": "Get a list of available data plans",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Data Plans"
+                ],
+                "summary": "Get data plans",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/utils.APISuccessResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "details": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/models.DataPlan"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
                         }
                     }
                 }
@@ -3359,6 +3436,24 @@ const docTemplate = `{
                 },
                 "uptimePrediction": {
                     "type": "number"
+                }
+            }
+        },
+        "services.LinkAccountRequest": {
+            "type": "object",
+            "required": [
+                "accountNumber",
+                "bankCode"
+            ],
+            "properties": {
+                "accountNumber": {
+                    "type": "string"
+                },
+                "bankCode": {
+                    "type": "string"
+                },
+                "isPrimary": {
+                    "type": "boolean"
                 }
             }
         },

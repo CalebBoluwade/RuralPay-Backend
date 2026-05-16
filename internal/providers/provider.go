@@ -107,7 +107,7 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 	if err != nil {
 		go func() {
 			// Sender
-			err := base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
+			err := base.notificationSVC.SendPaymentNotification(ctx, userID, &models.TransactionRecord{
 				TransactionID:      req.TransactionID,
 				OriginatorAccount:  req.FromAccount,
 				BeneficiaryAccount: req.BeneficiaryAccountNumber,
@@ -146,7 +146,7 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 
 	go func() {
 		// Sender
-		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
+		err = base.notificationSVC.SendPaymentNotification(ctx, userID, &models.TransactionRecord{
 			TransactionID:      req.TransactionID,
 			OriginatorAccount:  req.FromAccount,
 			BeneficiaryAccount: req.BeneficiaryAccountNumber,
@@ -162,8 +162,10 @@ func (base *BasePaymentProvider) HandlePaymentRequest(w http.ResponseWriter, r *
 			},
 		}, models.PaymentSent)
 
+		// base.notificationSVC.GetUserPreferences(ctx, userID)
+
 		// Receiver (If A Rural Pay User)
-		err = base.notificationSVC.SendPaymentNotification(ctx, &models.TransactionRecord{
+		err = base.notificationSVC.SendPaymentNotification(ctx, userID, &models.TransactionRecord{
 			TransactionID:      req.TransactionID,
 			OriginatorAccount:  req.FromAccount,
 			BeneficiaryAccount: req.BeneficiaryAccountNumber,

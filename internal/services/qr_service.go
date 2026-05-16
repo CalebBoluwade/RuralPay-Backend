@@ -34,7 +34,10 @@ func NewQRService(db *sql.DB, redis *redis.Client) *QRService {
 	}
 }
 
-func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantID string) (string, string, error) {
+func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantID string, size int) (string, string, error) {
+	if size <= 0 {
+		size = viper.GetInt("app.qr_size")
+	}
 	slog.Info("qr.generate.start")
 	if merchantID == "" {
 		slog.Error("qr.generate.error", "merchant", "Invalid Merchant")
@@ -71,13 +74,13 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 
 	emvData := s.buildEMVCoQR(qrToken)
 	slog.DebugContext(ctx, "qr.generate.emvco_built")
-	qr, err := qrcode.New(emvData, qrcode.Highest)
+	qr, err := qrcode.New(emvData, qrcode.Medium)
 	if err != nil {
 		slog.Error("qr.generate.error", "error", err)
 		return "", "", err
 	}
 
-	qrImg := qr.Image(1024)
+	qrImg := qr.Image(size)
 	qrWithLogo, err := s.addLogoToQR(qrImg)
 	if err != nil {
 		slog.Error("qr.generate.error", "error", err)
@@ -91,6 +94,8 @@ func (s *QRService) GenerateQRCode(ctx context.Context, userID string, merchantI
 	}
 
 	qrImage := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+	slog.Debug("qr.generate.success", "token", qrToken)
 	return emvData, qrImage, nil
 }
 

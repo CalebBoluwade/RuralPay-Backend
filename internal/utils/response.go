@@ -39,6 +39,7 @@ const (
 	OTPGenerationError   ResponseMessage = "Failed to Generate OTP"
 
 	InternalServiceError ResponseMessage = "Internal Service Error"
+	NIPServiceUnavailable ResponseMessage = "Banking service is currently unavailable, please try again later"
 )
 
 // Success Responses

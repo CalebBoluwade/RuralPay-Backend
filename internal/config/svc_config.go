@@ -33,6 +33,9 @@ func init() {
 	_ = viper.BindEnv("redis.port", "REDIS_PORT")
 	_ = viper.BindEnv("redis.password", "REDIS_PASSWORD")
 	_ = viper.BindEnv("redis.db", "REDIS_DB")
+	_ = viper.BindEnv("redis.sentinel.addrs", "REDIS_SENTINEL_ADDRS")
+	_ = viper.BindEnv("redis.sentinel.master", "REDIS_SENTINEL_MASTER")
+	_ = viper.BindEnv("redis.sentinel.password", "REDIS_SENTINEL_PASSWORD")
 
 	_ = viper.BindEnv("hsm.master_key", "HSM_MASTER_KEY")
 	_ = viper.BindEnv("hsm.salt", "HSM_SALT")
@@ -85,6 +88,8 @@ func init() {
 	_ = viper.BindEnv("nip.tsq_base_url", "NIP_TSQ_BASE_URL")
 	_ = viper.BindEnv("nip.timeout_seconds", "NIP_TIMEOUT_SECONDS")
 	viper.SetDefault("nip.timeout_seconds", 60)
+	_ = viper.BindEnv("cache.name_enquiry_ttl", "CACHE_NAME_ENQUIRY_TTL")
+	viper.SetDefault("cache.name_enquiry_ttl", 300)
 	_ = viper.BindEnv("nip.response_codes_path", "NIP_RESPONSE_CODES_PATH")
 	viper.SetDefault("nip.response_codes_path", "./internal/config/nip_response_codes.json")
 
@@ -150,6 +155,9 @@ func init() {
 	viper.SetDefault("app.scheme", "ruralpay")
 
 	_ = viper.BindEnv("app.qr_route", "APP_QR_ROUTE")
+
+	_ = viper.BindEnv("app.qr_size", "DEFAULT_QR_SIZE")
+	viper.SetDefault("app.qr_size", 384)
 
 	_ = viper.BindEnv("session.inactivity_ttl_minutes", "SESSION_INACTIVITY_TTL_MINUTES")
 	viper.SetDefault("session.inactivity_ttl_minutes", 5)

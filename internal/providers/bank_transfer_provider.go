@@ -34,7 +34,7 @@ func NewBankTransferPaymentProvider(db *sql.DB, redis *redis.Client, hsmInstance
 		BasePaymentProvider: NewBasePaymentProvider(db, redis, hsmInstance),
 		ledgerService:       services.NewDoubleLedgerService(db),
 
-		NIBSSClient:   services.NewNIBSSClient(redis),
+		NIBSSClient:   services.NewNIBSSClient(redis, db),
 		NIPService:    services.NewNIBSSNIPService(),
 		acctService:   services.NewAccountService(db, redis),
 		feePercentage: 0.5,
@@ -110,9 +110,9 @@ func (p *BankTransferPaymentProvider) ValidatePayment(ctx context.Context, req *
 	totalAmount := req.Amount + fee
 	slog.Info("bank_transfer.validate.fee", "tx_id", req.TransactionID, "amount", req.Amount, "fee", fee, "total", totalAmount, "balance", balance)
 
-	if balance < totalAmount {
-		return errors.New("Insufficient Balance")
-	}
+	// if balance < totalAmount {
+	// 	return errors.New("Insufficient Balance")
+	// }
 
 	return nil
 }
@@ -139,22 +139,22 @@ func (p *BankTransferPaymentProvider) ProcessPayment(ctx context.Context, req *m
 	}
 	defer tx.Rollback()
 
-	fee := p.calculateFee(req.Amount)
-	totalAmount := req.Amount + fee
+	// fee := p.calculateFee(req.Amount)
+	// totalAmount := req.Amount + fee
 
 	slog.Info("bank_transfer.process.ledger_transfer", "tx_id", req.TransactionID)
-	if err := p.ledgerService.TransferTx(ctx, tx, req.FromAccount, req.BeneficiaryAccountNumber, req.TransactionID, totalAmount); err != nil {
-		slog.Error("bank_transfer.process.ledger_failed", "tx_id", req.TransactionID, "error", err.Error())
-		return &models.PaymentResponse{
-			Reference:     "-",
-			Success:       false,
-			TransactionID: req.TransactionID,
-			Status:        models.TransactionStatusFailed,
-			Message:       utils.InternalServiceError,
-			PaymentMode:   models.PaymentModeBankTransfer,
-			Timestamp:     time.Now(),
-		}, err
-	}
+	// if err := p.ledgerService.TransferTx(ctx, tx, req.FromAccount, req.BeneficiaryAccountNumber, req.TransactionID, totalAmount); err != nil {
+	// 	slog.Error("bank_transfer.process.ledger_failed", "tx_id", req.TransactionID, "error", err.Error())
+	// 	return &models.PaymentResponse{
+	// 		Reference:     "-",
+	// 		Success:       false,
+	// 		TransactionID: req.TransactionID,
+	// 		Status:        models.TransactionStatusFailed,
+	// 		Message:       utils.InternalServiceError,
+	// 		PaymentMode:   models.PaymentModeBankTransfer,
+	// 		Timestamp:     time.Now(),
+	// 	}, err
+	// }
 
 	sessionId := utils.GenerateNIPSessionId(p.NIPService.GetNIPBankCode())
 

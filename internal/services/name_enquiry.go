@@ -21,11 +21,13 @@ const ACMT023ErrorMsg = "ACMT.023 Name Enquiry Failed: %w"
 
 // NameEnquiryResult is the normalized output of any name enquiry call.
 type NameEnquiryResult struct {
-	AccountName          string
-	AccountNumber        string
-	BankCode             string
-	BankName             string
-	NameEnquirySessionId string
+	AccountName            string
+	AccountNumber          string
+	BankCode               string
+	BankName               string
+	NameEnquirySessionId   string
+	BankVerificationNumber string
+	KYCLevel               string
 }
 
 // ACMT024Notifier is implemented by ISO20022NameEnquiry.
@@ -63,7 +65,29 @@ func newNIPNameEnquiry(redis *redis.Client) NameEnquiryService {
 	return &NIPNameEnquiry{Redis: redis, NIPService: NewNIBSSNIPService()}
 }
 
+func cachedNameEnquiry(ctx context.Context, r *redis.Client, accountNumber, bankCode string) *NameEnquiryResult {
+	if r == nil {
+		return nil
+	}
+	data, err := r.HGetAll(ctx, fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, accountNumber, bankCode)).Result()
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	return &NameEnquiryResult{
+		AccountName:            data["AccountName"],
+		AccountNumber:          data["AccountNumber"],
+		BankCode:               data["BankCode"],
+		BankVerificationNumber: data["BankVerificationNumber"],
+		KYCLevel:               data["KYCLevel"],
+		NameEnquirySessionId:   data["NameEnquirySessionId"],
+	}
+}
+
 func (s *NIPNameEnquiry) EnquireName(ctx context.Context, accountNumber, bankCode string) (*NameEnquiryResult, error) {
+	if cached := cachedNameEnquiry(ctx, s.Redis, accountNumber, bankCode); cached != nil {
+		return cached, nil
+	}
+
 	resp, err := s.NIPService.ExecuteNameEnquiry(ctx, &models.NESingleRequest{
 		SessionID:                  utils.GenerateNIPSessionId(s.NIPService.GetNIPBankCode()),
 		DestinationInstitutionCode: bankCode,
@@ -80,23 +104,31 @@ func (s *NIPNameEnquiry) EnquireName(ctx context.Context, accountNumber, bankCod
 	}
 
 	if s.Redis != nil {
-		err := s.Redis.HSet(ctx, fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, resp.SessionID), map[string]any{
-			"AccountName":   resp.AccountName,
-			"AccountNumber": resp.AccountNumber,
-			"BankCode":      resp.DestinationInstitutionCode,
-			"BVN":           resp.BankVerificationNumber,
-			"KYCLevel":      resp.KYCLevel,
+		cacheKey := fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, accountNumber, bankCode)
+		ttl := utils.GetTimeout("cache.name_enquiry_ttl", 300)
+		err := s.Redis.HSet(ctx, cacheKey, map[string]any{
+			"AccountName":            resp.AccountName,
+			"AccountNumber":          resp.AccountNumber,
+			"BankCode":               resp.DestinationInstitutionCode,
+			"BankVerificationNumber": resp.BankVerificationNumber,
+			"KYCLevel":               resp.KYCLevel,
+			"NameEnquirySessionId":   resp.SessionID,
 		}).Err()
 		if err != nil {
 			slog.Error("NIP.NameEnquiry.RedisCacheFailed", "account", accountNumber, "bank_code", bankCode, "error", err)
+		} else {
+			slog.Debug("NIP Name Enquiry Result Cached in Redis", "account", accountNumber, "bank_code", bankCode, "ttl_seconds", ttl.Seconds())
+			s.Redis.Expire(ctx, cacheKey, ttl)
 		}
 	}
 
 	return &NameEnquiryResult{
-		NameEnquirySessionId: resp.SessionID,
-		AccountName:          resp.AccountName,
-		AccountNumber:        resp.AccountNumber,
-		BankCode:             bankCode,
+		NameEnquirySessionId:   resp.SessionID,
+		AccountName:            resp.AccountName,
+		AccountNumber:          resp.AccountNumber,
+		BankCode:               bankCode,
+		BankVerificationNumber: resp.BankVerificationNumber,
+		KYCLevel:               resp.KYCLevel,
 	}, nil
 }
 
@@ -131,6 +163,10 @@ func (s *ISO20022NameEnquiry) NotifyAcmt024(msgID string, resp *models.Identific
 }
 
 func (s *ISO20022NameEnquiry) EnquireName(ctx context.Context, accountNumber, bankCode string) (*NameEnquiryResult, error) {
+	if cached := cachedNameEnquiry(ctx, s.Redis, accountNumber, bankCode); cached != nil {
+		return cached, nil
+	}
+
 	slog.Info("Initiating ISO20022 ACMT.023 Name Enquiry", "account", accountNumber, "bank_code", bankCode)
 	senderName := viper.GetString("nibss.institution_name")
 	senderBankCode := viper.GetString("nibss.institution_bank_code")
@@ -181,7 +217,9 @@ func (s *ISO20022NameEnquiry) EnquireName(ctx context.Context, accountNumber, ba
 
 	// Cache the result in Redis for quick retrieval during payment processing
 	if s.Redis != nil {
-		err := s.Redis.HSet(ctx, fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, idResp.AccountName), map[string]any{
+		cacheKey := fmt.Sprintf(constants.NameEnquiryMetadataKeyPrefix, accountNumber, bankCode)
+		ttl := utils.GetTimeout("cache.name_enquiry_ttl", 300)
+		err := s.Redis.HSet(ctx, cacheKey, map[string]any{
 			"AccountName":   idResp.AccountName,
 			"AccountNumber": accountNumber,
 			"BankCode":      bankCode,
@@ -190,6 +228,9 @@ func (s *ISO20022NameEnquiry) EnquireName(ctx context.Context, accountNumber, ba
 		}).Err()
 		if err != nil {
 			slog.Error("ISO20022.NameEnquiry.RedisCacheFailed", "account", accountNumber, "bank_code", bankCode, "error", err)
+		} else {
+			slog.Debug("ISO20022.NameEnquiry.RedisCacheSuccess", "account", accountNumber, "bank_code", bankCode, "ttl_seconds", ttl.Seconds())
+			s.Redis.Expire(ctx, cacheKey, ttl)
 		}
 	}
 

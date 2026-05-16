@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"time"
 
+	"database/sql"
+
 	"github.com/go-redis/redis/v8"
 	"github.com/moov-io/iso8583"
 	"github.com/ruralpay/backend/internal/circuitbreaker"
@@ -40,6 +42,7 @@ type NIBSSClient struct {
 	NameEnquiry    NameEnquiryService
 	FundsTransfer  FundsTransferService
 	BalanceEnquiry BalanceEnquiryService
+	MandateAdvice  MandateAdviceService
 
 	httpClient     *http.Client
 	circuitBreaker *gobreaker.CircuitBreaker
@@ -59,7 +62,11 @@ func fallback(primary, fallbackURL string) string {
 	return fallbackURL
 }
 
-func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
+func NewNIBSSClient(redis *redis.Client, db ...*sql.DB) *NIBSSClient {
+	var dbConn *sql.DB
+	if len(db) > 0 {
+		dbConn = db[0]
+	}
 	nibssBase := viper.GetString("nibss.base_url")
 
 	componentKey1Hex := viper.GetString("nibss.iso8583.component_key_1")
@@ -92,9 +99,10 @@ func NewNIBSSClient(redis *redis.Client) *NIBSSClient {
 		apiKey: viper.GetString("nibss.api_key"),
 
 		// iso8583Service: NewISO8583Service(),
-		FundsTransfer:  NewFundsTransferService(useNIBSSISOzNIPSwitch, redis),
+		FundsTransfer:  NewFundsTransferService(useNIBSSISOzNIPSwitch, redis, dbConn),
 		NameEnquiry:    NewNameEnquiryService(useNIBSSISOzNIPSwitch, redis),
 		BalanceEnquiry: NewBalanceEnquiryService(useNIBSSISOzNIPSwitch, redis),
+		MandateAdvice:  NewMandateAdviceService(useNIBSSISOzNIPSwitch, redis),
 
 		httpClient: &http.Client{
 			Timeout: utils.GetTimeout("nibss.http_timeout", 30),
